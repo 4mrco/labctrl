@@ -893,39 +893,6 @@ class App:
                 self.status("Erro ao remover registro.", erro=True)
             self._rebuild_abas()
             self._atualizar_lista()
-        matricula = self.entry_matricula.get().strip()
-
-        if not matricula:
-            # Sem matrícula → popup pede nome + tipo
-            res = self._popup_sem_matricula()
-            if not res:
-                return
-            nome, tipo = res
-            mat_db = None if tipo == "Aluno" else "SERVIDOR"
-            self.entry_matricula.delete(0, tk.END)
-            if self._fluxo_entrada(mat_db, nome):
-                self._rebuild_abas()
-                self._atualizar_lista()
-            return
-
-        resultado = buscar_aluno(matricula)
-        if not resultado:
-            nome = self._pedir_input("Novo aluno", "Nome completo:")
-            if not nome:
-                return
-            try:
-                inserir_aluno(matricula, nome, tipo="aluno")
-            except Exception as e:
-                log.error("Falha ao inserir aluno: %s", e)
-                self.status("Erro ao cadastrar aluno.", erro=True)
-                return
-        else:
-            nome = resultado[0]
-
-        self.entry_matricula.delete(0, tk.END)
-        if self._fluxo_entrada(matricula, nome):
-            self._rebuild_abas()
-            self._atualizar_lista()
 
     def registrar_servidor(self):
         nome = self._pedir_input("Servidor", "Nome completo:")
@@ -942,48 +909,6 @@ class App:
                 return
 
         if self._fluxo_entrada(matricula, nome):
-            self._rebuild_abas()
-            self._atualizar_lista()
-
-    def _registrar_saida(self, matricula: str):
-        rid = buscar_registro_ativo(matricula)
-        if rid:
-            try:
-                nome = (buscar_aluno(matricula) or (matricula,))[0]
-                finalizar_registro(rid, agora().strftime("%H:%M"))
-                self._push_undo({"tipo": "saida", "rid": rid, "nome": nome})
-                self.status(f"Saída de {nome} registrada.")
-            except Exception as e:
-                log.error("Falha ao registrar saída: %s", e)
-                self.status("Erro ao registrar saída.", erro=True)
-        self._atualizar_lista()
-    
-    def _remover_registro(self):
-        tree = self._get_tree_ativa()
-        sel  = tree.selection()
-        if not sel:
-            return
-        rid = int(tree.item(sel[0])["tags"][0])
-        reg = buscar_registro_por_id(rid)
-        if not reg:
-            return
-        if messagebox.askyesno("Confirmar", "Remover registro?"):
-            try:
-                self._push_undo({
-                    "tipo": "remocao",
-                    "nome": reg[1],
-                    "campos": {
-                        "id": reg[0], "nome": reg[1], "matricula": reg[2],
-                        "data": reg[3], "entrada": reg[4], "saida": reg[5],
-                        "maquina": reg[6], "bolsista": reg[7], "status": reg[8],
-                    },
-                })
-                deletar_registro(rid)
-                self.status("Registro removido.")
-            except Exception as e:
-                self._undo_stack.pop()
-                log.error("Falha ao remover: %s", e)
-                self.status("Erro ao remover registro.", erro=True)
             self._rebuild_abas()
             self._atualizar_lista()
 
