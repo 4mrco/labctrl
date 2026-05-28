@@ -536,6 +536,15 @@ class App:
         export_menu.add_command(label="Semana", command=self._exportar_semana)
         export_menu.add_command(label="Mês",    command=self._exportar_mes)
         self.menu.add_cascade(label="Exportar", menu=export_menu)
+        self.menu.add_separator()
+
+        copiar_menu = tk.Menu(self.menu, tearoff=0)
+        copiar_menu.add_command(label="Hoje",        command=lambda: self._copiar_periodo("Hoje"))
+        copiar_menu.add_command(label="Ontem",       command=lambda: self._copiar_periodo("Ontem"))
+        copiar_menu.add_command(label="Semana",      command=lambda: self._copiar_periodo("Semana"))
+        copiar_menu.add_command(label="Mês",         command=lambda: self._copiar_periodo("Mês"))
+        copiar_menu.add_command(label="Personalizado", command=self._abrir_copiar_personalizado)
+        self.menu.add_cascade(label="Copiar Dados", menu=copiar_menu)
 
         self.menu.add_command(label="Visualizar DB", command=self._visualizar_db)
         self.menu.add_separator()
@@ -1213,6 +1222,116 @@ class App:
             marcar_mes=mes,
         )
 
+    # ── Copiar Dados ───────────────────────────────
+
+    def _gerar_csv(self, dados: list[tuple]) -> str:
+        """Gera CSV com cabeçalho e dados na ordem exigida."""
+        linhas = ["Data,Horário Entrada,Horário Saída,Nome,Matrícula,Máquina (Nº),Nome do bolsista presente"]
+        for data, entrada, saida, nome, mat, maquina, bolsista in dados:
+            mat_fmt = "" if not mat or mat == "SERVIDOR" else mat
+            linhas.append(f"{data},{entrada},{saida or ''},{nome},{mat_fmt},{maquina or ''},{bolsista or ''}")
+        return "\n".join(linhas)
+
+    def _copiar_periodo(self, periodo: str):
+        if periodo == "Hoje":
+            dados = buscar_export_dia(agora().strftime("%d/%m/%Y"))
+        elif periodo == "Ontem":
+            dados, _ = buscar_export_ontem()
+        elif periodo == "Semana":
+            dados = buscar_export_semana(datas_semana_atual())
+        elif periodo == "Mês":
+            dados = buscar_export_mes(self._mes_ativo())
+        else:
+            return
+        if dados:
+            csv = self._gerar_csv(dados)
+            self.root.clipboard_clear()
+            self.root.clipboard_append(csv)
+            messagebox.showinfo("Copiar Dados", "Copiado para a área de transferência")
+
+    def _abrir_copiar_personalizado(self):
+        win = tk.Toplevel(self.root)
+        win.title("Copiar dados para planilha")
+        win.resizable(False, False)
+        win.grab_set()
+
+        var_periodo = tk.StringVar(value=self._mes_ativo())
+        periodo_cb = ttk.Combobox(win, textvariable=var_periodo, values=buscar_meses(), width=15, state="readonly")
+        periodo_cb.grid(row=0, column=0, columnspan=2, padx=10, pady=(12, 4))
+
+        frame_alunos = tk.Frame(win)
+        frame_alunos.grid(row=1, column=0, columnspan=2, padx=10, pady=4)
+        canvas = tk.Canvas(frame_alunos, width=280, height=200)
+        scrollbar = ttk.Scrollbar(frame_alunos, orient="vertical", command=canvas.yview)
+        scroll_frame = tk.Frame(canvas)
+        scroll_frame.bind("<Configure>", lambda _: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        var_todos = tk.IntVar()
+        var_alunos = {}
+        aluno_cbs = []
+
+        def toggle_todos():
+            for var in var_alunos.values():
+                var.set(var_todos.get())
+
+        tk.Checkbutton(scroll_frame, text="Todos", variable=var_todos, command=toggle_todos).pack(anchor="w")
+
+        def atualizar_alunos():
+            for cb in aluno_cbs:
+                cb.destroy()
+            aluno_cbs.clear()
+            var_alunos.clear()
+
+            periodo = var_periodo.get()
+            with get_conn() as conn:
+                registros = conn.execute(
+                    "SELECT DISTINCT matricula, nome FROM registros WHERE strftime('%Y-%m', data) = ? ORDER BY nome",
+                    (periodo.split("/")[1] + "-" + periodo.split("/")[0],)
+                ).fetchall()
+
+            for mat, nome in registros:
+                var = tk.IntVar()
+                var_alunos[mat] = var
+                cb = tk.Checkbutton(scroll_frame, text=f"{nome} - {mat}", variable=var)
+                cb.pack(anchor="w")
+                aluno_cbs.append(cb)
+
+        periodo_cb.bind("<<ComboboxSelected>>", lambda _: (atualizar_alunos(), var_todos.set(0)))
+        atualizar_alunos()
+
+        def copiar():
+            periodo = var_periodo.get()
+            matriculas = [m for m, v in var_alunos.items() if v.get()]
+
+            if var_todos.get():
+                dados = buscar_export_mes(periodo)
+            elif not matriculas:
+                messagebox.showwarning("Aviso", "Selecione ao menos um aluno.", parent=win)
+                return
+            else:
+                with get_conn() as conn:
+                    dados = conn.execute(
+                        f"SELECT data,entrada,saida,nome,matricula,maquina,bolsista FROM registros WHERE matricula IN ({','.join('?'*len(matriculas))}) ORDER BY data, entrada",
+                        matriculas
+                    ).fetchall()
+
+            if not dados:
+                messagebox.showinfo("Copiar Dados", f"Nenhum registro para o período.", parent=win)
+                return
+
+            csv = self._gerar_csv(dados)
+            self.root.clipboard_clear()
+            self.root.clipboard_append(csv)
+            win.destroy()
+            messagebox.showinfo("Copiar Dados", "Copiado para a área de transferência")
+
+        tk.Button(win, text="COPIAR CSV", command=copiar).grid(row=2, column=0, columnspan=2, pady=12)
+        win.bind("<Return>", lambda _: copiar())
+
     # ── Janelas auxiliares ────────────────────
 
     def _visualizar_db(self):
@@ -1425,7 +1544,7 @@ class App:
 
         tk.Button(win, text="Salvar", command=salvar).grid(
             row=len(defs), column=0, columnspan=2, pady=10)
-        win.bind("<Return>", lambda e: salvar())
+        win.bind("<Return>", lambda _: salvar())
 
     def _pedir_input(self, titulo: str, mensagem: str) -> str | None:
         win = tk.Toplevel(self.root)
