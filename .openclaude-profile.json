@@ -2,7 +2,7 @@
   "profile": "openai",
   "env": {
     "OPENAI_BASE_URL": "http://localhost:4000/v1",
-    "OPENAI_MODEL": "laguna-m.1",
+    "OPENAI_MODEL": "laguna-m1",
     "OPENAI_API_KEY": ""
   },
   "createdAt": "2026-05-20T17:14:37.908Z"
