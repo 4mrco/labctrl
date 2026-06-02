@@ -50,10 +50,10 @@ BOLSISTAS_INICIAIS = [
 ]
 
 TEMAS = {
-    "dark":  {"bg": "#2b2b2b", "fg": "#ffffff", "field": "#3c3f41", "select": "#4b4f52",
-              "ativo_bg": "#1f3a5f"},
-    "light": {"bg": "#f0f0f0", "fg": "#000000", "field": "#ffffff", "select": "#d0d0d0",
-              "ativo_bg": "#caf0f8"},
+    "dark":  {"bg": "#1E1F22", "fg": "#FFFFFF", "field": "#313338", "select": "#404249",
+              "ativo_bg": "#2A3B5A", "row_a": "#2B2D31", "row_b": "#25272B"},
+    "light": {"bg": "#F5F5F5", "fg": "#000000", "field": "#FFFFFF", "select": "#E0E0E0",
+              "ativo_bg": "#D0E0F0", "row_a": "#FFFFFF", "row_b": "#F8F8F8"},
 }
 
 COL_NAMES = ("Nome", "Matrícula", "Entrada", "Saída", "Tempo", "Máquina")
@@ -437,13 +437,13 @@ class App:
         self.root.minsize(820, 400)
         self.config = load_config()
 
-        # estado de ordenação por aba: mes -> (coluna, reverso)
-        self._sort_state:  dict[str, tuple[str, bool]] = {}
-        # widgets por aba: mes -> {tree, btn_saida, bar}
-        self._tab_widgets: dict[str, dict]             = {}
+        # estado de ordenação por coluna
+        self._sort_state: dict = {}
         self._status_job = None
         # pilha de undo: lista de dicts {tipo, ...dados para reverter}
         self._undo_stack: list[dict] = []
+        # tema escuro ativo
+        self._tema_escuro: bool = True
 
         self._build_ui()
         self._build_menu()
@@ -460,75 +460,171 @@ class App:
     # ── UI base ──────────────────────────────
 
     def _build_ui(self):
-        self.top = tk.Frame(self.root)
-        self.top.pack(fill="x", pady=2)
+        # HEADER
+        self.header = tk.Frame(self.root, height=40)
+        self.header.pack(fill="x", side="top")
+        self.header.pack_propagate(False)
 
-        self.lbl_dashboard = tk.Label(self.top, text="")
-        self.lbl_dashboard.pack(side="left", padx=5)
+        # Header title
+        self.lbl_title = tk.Label(self.header, text="LabCTRL", font=("Segoe UI", 12, "bold"))
+        self.lbl_title.pack(side="left", padx=12)
 
-        tk.Label(self.top, text="Matrícula").pack(side="left")
+        # Separator line
+        self.sep_header = tk.Frame(self.root, height=1)
+        self.sep_header.pack(fill="x", side="top")
 
-        # Validação: só números, máximo 6 dígitos
-        vcmd = (self.root.register(
-            lambda P: P.isdigit() and len(P) <= 6 or P == ""
-        ), "%P")
-        self.entry_matricula = tk.Entry(self.top, width=10, validate="key",
-                                        validatecommand=vcmd)
-        self.entry_matricula.pack(side="left")
+        # Dashboard stats in header
+        self.lbl_dashboard = tk.Label(self.header, text="")
+        self.lbl_dashboard.pack(side="left", padx=16)
+
+        # Filter buttons
+        self.var_filtro = tk.StringVar(value="Mês")
+        self._btns_filtro = {}
+        for opcao in ("Hoje", "Ativos", "Mês"):
+            b = tk.Button(
+                self.header, text=opcao, width=7,
+                command=lambda o=opcao: self._set_filtro(o),
+            )
+            b.pack(side="left", padx=2)
+            self._btns_filtro[opcao] = b
+
+        self.lbl_clock = tk.Label(self.header, text="")
+        self.lbl_clock.pack(side="right", padx=12)
+
+        
+        # CONTROLS TOOLBAR
+        self.toolbar = tk.Frame(self.root)
+        self.toolbar.pack(fill="x", padx=12, pady=8)
+
+        # Matrícula entry with placeholder
+        self.entry_matricula = tk.Entry(self.toolbar, width=16, validate="key")
+        self.entry_matricula["validatecommand"] = (
+            self.root.register(lambda P: P.isdigit() and len(P) <= 6 or P == ""), "%P"
+        )
+        self.entry_matricula.pack(side="left", padx=(0, 8))
         self.entry_matricula.bind("<Return>", self.registrar_entrada)
         self.entry_matricula.focus()
 
-        tk.Button(self.top, text="ENTRADA",
-                  command=self.registrar_entrada).pack(side="left", padx=(3, 1))
-        tk.Label(self.top, text="Máquina").pack(side="left")
+        # Placeholder handling - entry uses normal text variable, placeholder drawn manually
+        self._ph_matricula = tk.StringVar(value="Matrícula")
+        self.entry_matricula.configure(textvariable=self._ph_matricula, fg="#B5BAC1")
+        self.entry_matricula.bind("<FocusIn>", lambda e: self._on_entry_focus(e))
+        self.entry_matricula.bind("<FocusOut>", lambda e: self._on_entry_focus_out(e))
+
+        # Month selector - separate row below toolbar
+        self.frame_mes = tk.Frame(self.root)
+        self.frame_mes.pack(fill="x", padx=12, pady=(0, 4))
+        self.lbl_mes = tk.Label(self.frame_mes, text="Mês:", anchor="w")
+        self.lbl_mes.pack(side="left", padx=(0, 4))
+        self.combo_mes = ttk.Combobox(
+            self.frame_mes, values=[], width=14, state="readonly"
+        )
+        self.combo_mes.pack(side="left", padx=(0, 8))
+        self.combo_mes.bind("<<ComboboxSelected>>", self._on_mes_change)
+
+        # Máquina combobox
         self.combo_maquina = ttk.Combobox(
-            self.top, values=["-", "ML"] + [f"{i:02}" for i in range(1, 21)],
-            width=4, state="readonly",
+            self.toolbar, values=["-", "ML"] + [f"{i:02}" for i in range(1, 21)],
+            width=6, state="readonly",
         )
         self.combo_maquina.set("-")
-        self.combo_maquina.pack(side="left")
+        self.combo_maquina.pack(side="left", padx=8)
 
-        tk.Label(self.top, text="Bolsista").pack(side="left")
-        self.combo_bolsista = ttk.Combobox(
-            self.top, values=buscar_bolsistas(), width=30, state="readonly"
-        )
+        # Bolsista combobox
         bolsistas = buscar_bolsistas()
+        self.combo_bolsista = ttk.Combobox(
+            self.toolbar, values=bolsistas, width=28, state="readonly"
+        )
         ultimo = self.config.get("ultimo_bolsista")
         if ultimo and ultimo in bolsistas:
             self.combo_bolsista.set(ultimo)
         elif bolsistas:
             self.combo_bolsista.set(bolsistas[0])
         self.combo_bolsista.bind("<<ComboboxSelected>>", self._on_bolsista_change)
-        self.combo_bolsista.pack(side="left")
+        self.combo_bolsista.pack(side="left", padx=8)
 
-        self.lbl_clock = tk.Label(self.top, text="")
-        self.lbl_clock.pack(side="right", padx=10)
+        # ENTRADA button
+        self.btn_entrada = tk.Button(self.toolbar, text="ENTRADA",
+                                     command=self.registrar_entrada, width=10)
+        self.btn_entrada.pack(side="left", padx=(12, 0))
 
-        self.btn_menu = tk.Button(self.top, text="☰")
-        self.btn_menu.pack(side="right", padx=5)
+        # ── MENU POPUP ──────────────────────────
+        self.btn_menu = tk.Button(self.header, text="[≡]", width=3, relief="flat")
+        self.btn_menu.pack(side="right", padx=8)
+        self.btn_menu.bind("<Button-1>", lambda e: self.menu.tk_popup(e.x_root, e.y_root))
 
-        # ── Barra de filtro ──
-        self.bar_filtro = tk.Frame(self.root)
-        self.bar_filtro.pack(fill="x", padx=4, pady=(2, 0))
+        self.menu = tk.Menu(self.root, tearoff=0)
+        self.menu.add_command(label="Editar selecionado", command=self._editar_registro)
+        self.menu.add_command(label="Remover selecionado", command=self._remover_registro)
+        self.menu.add_separator()
 
-        tk.Label(self.bar_filtro, text="Filtro:").pack(side="left", padx=(2, 4))
-        self.var_filtro = tk.StringVar(value="Mês")
-        self._btns_filtro = {}
-        for opcao in ("Hoje", "Ativos", "Mês"):
-            b = tk.Button(
-                self.bar_filtro, text=opcao, width=7,
-                command=lambda o=opcao: self._set_filtro(o),
+        export_menu = tk.Menu(self.menu, tearoff=0)
+        export_menu.add_command(label="Dia", command=self._exportar_dia)
+        export_menu.add_command(label="Ontem", command=self._exportar_ontem)
+        export_menu.add_command(label="Semana", command=self._exportar_semana)
+        export_menu.add_command(label="Mês", command=self._exportar_mes)
+        self.menu.add_cascade(label="Exportar", menu=export_menu)
+
+        self.menu.add_command(label="Visualizar DB", command=self._visualizar_db)
+        self.menu.add_separator()
+        self.menu.add_command(label="Bolsistas", command=self._abrir_bolsistas)
+        self.menu.add_command(label="Alunos / Servidores", command=self._abrir_alunos)
+        self.menu.add_separator()
+        self.menu.add_command(label="Alternar Tema", command=self._toggle_tema)
+
+        # MAIN CONTENT - Tree frame
+        self.tree_frame = tk.Frame(self.root)
+        self.tree_frame.pack(fill="both", expand=True, padx=12, pady=(4, 0))
+
+        self.tree = ttk.Treeview(self.tree_frame, columns=COL_NAMES, show="headings")
+        for col in COL_NAMES:
+            self.tree.heading(
+                col, text=col,
+                command=lambda c=col: self._ordenar(c),
             )
-            b.pack(side="left", padx=1)
-            self._btns_filtro[opcao] = b
+        self.tree.pack(fill="both", expand=True, side="left")
 
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill="both", expand=True)
+        # Tree scrollbar
+        self.tree_scroll = ttk.Scrollbar(self.tree_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=self.tree_scroll.set)
+        self.tree_scroll.pack(fill="y", side="right")
 
-        self.lbl_status = tk.Label(
-            self.root, text="", anchor="w", relief="sunken", padx=6, pady=2,
-        )
-        self.lbl_status.pack(fill="x", side="bottom")
+        self.tree.bind("<<TreeviewSelect>>", self._on_select)
+        self.tree.bind("<Double-1>", self._on_double_click)
+        self.tree.bind("<BackSpace>", lambda e: self._saida_selecionado())
+
+        # BOTTOM STATUS BAR
+        self.bottom_bar = tk.Frame(self.root, height=26)
+        self.bottom_bar.pack(fill="x", side="bottom")
+        self.bottom_bar.pack_propagate(False)
+
+        self.lbl_selecionados = tk.Label(self.bottom_bar, text="Selecionados: 0", anchor="w", padx=8)
+        self.lbl_selecionados.pack(side="left")
+
+        self.lbl_registros = tk.Label(self.bottom_bar, text="Registros: 0", anchor="w", padx=8)
+        self.lbl_registros.pack(side="left")
+
+        self.lbl_status = tk.Label(self.bottom_bar, text="Pronto", anchor="w", padx=8)
+        self.lbl_status.pack(side="left", padx=12)
+
+        # Bottom bar action buttons
+        self.btn_saida = tk.Button(self.bottom_bar, text="Registrar Saída",
+                                   command=self._saida_selecionado, state="disabled", width=12)
+        self.btn_saida.pack(side="right", padx=6)
+
+        self.btn_desfazer = tk.Button(self.bottom_bar, text="↶",
+                                      command=self._desfazer, width=3)
+        self.btn_desfazer.pack(side="right", padx=4)
+
+    def _on_entry_focus(self, event):
+        if self._ph_matricula.get() == "Matrícula":
+            self._ph_matricula.set("")
+            self.entry_matricula.configure(fg="#FFFFFF")
+
+    def _on_entry_focus_out(self, event):
+        if not self._ph_matricula.get():
+            self._ph_matricula.set("Matrícula")
+            self.entry_matricula.configure(fg="#B5BAC1")
 
     def _build_menu(self):
         self.menu = tk.Menu(self.root, tearoff=0)
@@ -542,7 +638,7 @@ class App:
         export_menu.add_command(label="Semana", command=self._exportar_semana)
         export_menu.add_command(label="Mês",    command=self._exportar_mes)
         self.menu.add_cascade(label="Exportar", menu=export_menu)
-        self.menu.add_separator()
+        
 
         copiar_menu = tk.Menu(self.menu, tearoff=0)
         copiar_menu.add_command(label="Hoje",        command=lambda: self._copiar_periodo("Hoje"))
@@ -551,7 +647,8 @@ class App:
         copiar_menu.add_command(label="Mês",         command=lambda: self._copiar_periodo("Mês"))
         copiar_menu.add_command(label="Personalizado", command=self._abrir_copiar_personalizado)
         self.menu.add_cascade(label="Copiar Dados", menu=copiar_menu)
-
+        self.menu.add_separator()
+        
         self.menu.add_command(label="Visualizar DB", command=self._visualizar_db)
         self.menu.add_separator()
         self.menu.add_command(label="Bolsistas",           command=self._abrir_bolsistas)
@@ -568,12 +665,7 @@ class App:
 
     def _set_filtro(self, opcao: str):
         self.var_filtro.set(opcao)
-        t = TEMAS[self.config["theme"]]
-        for nome, btn in self._btns_filtro.items():
-            btn.configure(
-                relief="sunken" if nome == opcao else "raised",
-                bg=t["select"] if nome == opcao else t["field"],
-            )
+        self._aplicar_tema()  # Re-color filter buttons
         self._atualizar_lista()
 
     # ── Popup entrada sem matrícula ──────────
@@ -625,126 +717,104 @@ class App:
 
         self._status_job = self.root.after(
             4000,
-            lambda: self.lbl_status.config(text="")
+            lambda: self.lbl_status.config(text="Pronto")
         )
-    # ── Abas ─────────────────────────────────
+    # ── Mês formatting ─────────────────────────
+
+    def _meses_formatados(self) -> list[str]:
+        """Return months in format 'Junho 2026' for combobox."""
+        meses_num = {"01": "Janeiro", "02": "Fevereiro", "03": "Março", "04": "Abril",
+                     "05": "Maio", "06": "Junho", "07": "Julho", "08": "Agosto",
+                     "09": "Setembro", "10": "Outubro", "11": "Novembro", "12": "Dezembro"}
+        raw_meses = buscar_meses()
+        return [f"{meses_num.get(m[:2], m[:2])} {m[3:]}" for m in raw_meses]
+
+    def _parse_mes_combo(self, texto: str) -> str:
+        """Convert 'Junho 2026' back to '06/2026' format."""
+        meses_num = {"Janeiro": "01", "Fevereiro": "02", "Março": "03", "Abril": "04",
+                     "Maio": "05", "Junho": "06", "Julho": "07", "Agosto": "08",
+                     "Setembro": "09", "Outubro": "10", "Novembro": "11", "Dezembro": "12"}
+        partes = texto.split()
+        return f"{meses_num.get(partes[0], partes[0])}/{partes[1]}"
+
+    # ── Abas (simplified) ───────────────────
 
     def _rebuild_abas(self):
-        for tab in self.notebook.tabs():
-            self.notebook.forget(tab)
-        self._tab_widgets.clear()
+        """Populate month combobox and initialize sort state."""
+        self.combo_mes["values"] = self._meses_formatados()
+        # Select current month if available
+        hoje = agora().strftime("%d/%m/%Y")
+        mes_atual = hoje[3:]
+        formatted = self._meses_formatados()
+        for f in formatted:
+            if self._parse_mes_combo(f) == mes_atual:
+                self.combo_mes.set(f)
+                break
+        if not self.combo_mes.get() and formatted:
+            self.combo_mes.set(formatted[0])
 
-        t = TEMAS[self.config["theme"]]
-
-        for mes in buscar_meses():
-            frame = tk.Frame(self.notebook)
-            self.notebook.add(frame, text=mes)
-
-            tree = ttk.Treeview(frame, columns=COL_NAMES, show="headings")
-            for col in COL_NAMES:
-                tree.heading(
-                    col, text=col,
-                    command=lambda c=col, m=mes: self._ordenar(c, m),
-                )
-            tree.pack(fill="both", expand=True)
-            tree.bind("<Double-Button-1>",  self._on_double_click)
-            tree.bind("<<TreeviewSelect>>", self._on_select)
-
-            # Barra de ação abaixo da lista
-            bar = tk.Frame(frame, bg=t["bg"])
-            bar.pack(fill="x", padx=4, pady=2)
-
-            bar.columnconfigure(0, weight=1)
-
-            btn_saida = tk.Button(
-                bar,
-                text="Saída [⌫]",
-                state="disabled",
-                command=self._saida_selecionado,
-            )
-
-            btn_saida.grid(row=0, column=1, padx=(4, 0))
-
-            btn_desfazer = tk.Button(
-                bar,
-                text="↶",
-                command=self._desfazer,
-                width=2,
-            )
-
-            btn_desfazer.grid(row=0, column=2, padx=(2, 0))
-
-            tree.bind("<BackSpace>", lambda e: self._saida_selecionado())
-
-            self._tab_widgets[mes] = {
-                "tree":         tree,
-                "btn_saida":    btn_saida,
-                "btn_desfazer": btn_desfazer,
-                "bar":          bar,
-            }
-
-            self._aplicar_tema()
-
-    def _get_tree_ativa(self) -> ttk.Treeview:
-        return self._tab_widgets[self._mes_ativo()]["tree"]
+        self._sort_state.clear()
+        self._atualizar_lista()
 
     def _mes_ativo(self) -> str:
-        return self.notebook.tab(self.notebook.select(), "text")
+        """Return the currently selected month in DD/MM/YYYY format (using current day)."""
+        mes_combo = self.combo_mes.get()
+        if not mes_combo:
+            return agora().strftime("%m/%Y")
+        return self._parse_mes_combo(mes_combo)
 
     # ── Ordenação por coluna ─────────────────
 
-    def _ordenar(self, col: str, mes: str):
-        if mes not in self._tab_widgets:
+    def _ordenar(self, col: str, evento=None):
+        mes = self.combo_mes.get()
+        if not mes:
             return
-        tree = self._tab_widgets[mes]["tree"]
-
         reverse = False
-        estado  = self._sort_state.get(mes)
+        estado = self._sort_state.get("current")
         if estado and estado[0] == col:
             reverse = not estado[1]
-        self._sort_state[mes] = (col, reverse)
+        self._sort_state["current"] = (col, reverse)
 
-        idx   = COL_NAMES.index(col)
-        items = [(tree.item(i)["values"][idx] or "", i) for i in tree.get_children()]
+        idx = COL_NAMES.index(col)
+        items = [(self.tree.item(i)["values"][idx] or "", i) for i in self.tree.get_children()]
         items.sort(key=lambda x: str(x[0]).lower(), reverse=reverse)
 
         for order, (_, item) in enumerate(items):
-            tree.move(item, "", order)
+            self.tree.move(item, "", order)
 
         for c in COL_NAMES:
             arrow = (" ↓" if reverse else " ↑") if c == col else ""
-            tree.heading(c, text=c + arrow,
-                         command=lambda cc=c, m=mes: self._ordenar(cc, m))
+            self.tree.heading(c, text=c + arrow,
+                            command=lambda cc=c: self._ordenar(cc))
+
+    def _on_mes_change(self, event=None):
+        self._sort_state.clear()
+        self._atualizar_lista()
 
     # ── Eventos ──────────────────────────────
 
-    def _on_select(self, event):
-        tree: ttk.Treeview = event.widget
-        for mes, w in self._tab_widgets.items():
-            if w["tree"] is tree:
-                sel = tree.selection()
-                btn = w["btn_saida"]
-                if sel:
-                    tags   = tree.item(sel[0])["tags"]
-                    status = tags[1] if len(tags) > 1 else ""
-                    btn.config(state="normal" if status == "ATIVO" else "disabled")
-                else:
-                    btn.config(state="disabled")
-                break
+    def _on_select(self, event=None):
+        sel = self.tree.selection()
+        if sel:
+            tags = self.tree.item(sel[0])["tags"]
+            status = tags[1] if len(tags) > 1 else ""
+            self.btn_saida.configure(state="normal" if status == "ATIVO" else "disabled")
+            self.lbl_selecionados.config(text=f"Selecionados: {len(sel)}")
+        else:
+            self.btn_saida.configure(state="disabled")
+            self.lbl_selecionados.config(text="Selecionados: 0")
 
-    def _on_double_click(self, event):
-        tree: ttk.Treeview = event.widget
-        item = tree.identify_row(event.y)
+    def _on_double_click(self, event=None):
+        item = self.tree.identify_row(event.y)
         if item:
-            rid = int(tree.item(item)["tags"][0])
+            rid = int(self.tree.item(item)["tags"][0])
             self._abrir_form_edicao(rid)
 
     def _saida_selecionado(self):
-        tree = self._get_tree_ativa()
-        sel  = tree.selection()
+        sel = self.tree.selection()
         if not sel:
             return
-        rid = int(tree.item(sel[0])["tags"][0])
+        rid = int(self.tree.item(sel[0])["tags"][0])
         self._registrar_saida_por_rid(rid)
 
     def _registrar_saida_por_rid(self, rid: int):
@@ -781,7 +851,9 @@ class App:
     def _focus_matricula(self):
         """Retorna foco para entry_matricula com texto selecionado se houver."""
         self.entry_matricula.focus()
-        if self.entry_matricula.get():
+        mat = self._ph_matricula.get()
+        # Only select if it's actual input (not placeholder)
+        if mat and mat != "Matrícula":
             self.entry_matricula.select_range(0, tk.END)
 
     def _on_ctrl_z(self, event=None):
@@ -884,6 +956,9 @@ class App:
     
     def registrar_entrada(self, event=None):
         matricula = self.entry_matricula.get().strip()
+        # Handle placeholder text
+        if matricula == "Matrícula" or matricula == "":
+            matricula = ""
 
         if not matricula:
             res = self._popup_sem_matricula()
@@ -891,10 +966,9 @@ class App:
                 return
             nome, tipo = res
             mat_db = None if tipo == "Aluno" else "SERVIDOR"
-            self.entry_matricula.delete(0, tk.END)
+            self._ph_matricula.set("Matrícula")
             if self._fluxo_entrada(mat_db, nome):
                 self._rebuild_abas()
-                self._atualizar_lista()
             self._focus_matricula()
             return
 
@@ -912,14 +986,13 @@ class App:
         else:
             nome = resultado[0]
 
-        self.entry_matricula.delete(0, tk.END)
+        self._ph_matricula.set("Matrícula")
         if self._fluxo_entrada(matricula, nome):
             self._rebuild_abas()
-            self._atualizar_lista()
         self._focus_matricula()
 
     def _remover_registro(self):
-        tree = self._get_tree_ativa()
+        tree = self.tree
         sel  = tree.selection()
         if not sel:
             return
@@ -970,47 +1043,57 @@ class App:
     # ── Atualização da lista ──────────────────
 
     def _atualizar_lista(self):
-        t      = TEMAS[self.config["theme"]]
-        filtro = self.var_filtro.get()
-        hoje   = agora().strftime("%d/%m/%Y")
+        t = TEMAS[self.config["theme"]]
+        hoje = agora().strftime("%d/%m/%Y")
 
-        for mes, widgets in self._tab_widgets.items():
-            tree: ttk.Treeview = widgets["tree"]
-            tree.tag_configure("ATIVO",      background=t["ativo_bg"])
-            tree.tag_configure("FINALIZADO", background=t["bg"])
+        # Parse selected month
+        mes_combo = self.combo_mes.get()
+        if not mes_combo:
+            return
+        mes = self._parse_mes_combo(mes_combo)
 
-            tree.delete(*tree.get_children())
+        # Clear and configure tree
+        self.tree.delete(*self.tree.get_children())
 
-            registros = buscar_registros_por_mes(mes)
+        self.tree.tag_configure("ATIVO", background=t["ativo_bg"])
+        self.tree.tag_configure("FINALIZADO", background=t["bg"])
 
-            if filtro == "Hoje":
-                registros = [r for r in registros if r[3] == hoje]
-            elif filtro == "Ativos":
-                registros = [r for r in registros if r[7] == "ATIVO"]
+        registros = buscar_registros_por_mes(mes)
 
-            for r in registros:
-                rid, nome, matricula, data, entrada, saida, maquina, status = r
-                tempo = calcular_tempo(entrada, saida, data) if saida else ""
+        # Apply filters based on var_filtro
+        filtro = self.var_filtro.get() if hasattr(self, 'var_filtro') else "Mês"
+        if filtro == "Hoje":
+            registros = [r for r in registros if r[3] == hoje]
+        elif filtro == "Ativos":
+            registros = [r for r in registros if r[7] == "ATIVO"]
 
-                if not matricula:
-                    mat_exib = ""
-                elif matricula == "SERVIDOR":
-                    mat_exib = "Servidor"
-                elif matricula.startswith("SRV-"):
-                    mat_exib = "servidor"
-                else:
-                    mat_exib = matricula
+        # Populate with zebra striping
+        for i, r in enumerate(registros):
+            rid, nome, matricula, data, entrada, saida, maquina, status = r
+            tempo = calcular_tempo(entrada, saida, data) if saida else ""
 
-                tree.insert(
-                    "", "end",
-                    values=(nome, mat_exib, entrada, saida or "", tempo, maquina or "-"),
-                    tags=(str(rid), status),
-                )
+            if not matricula:
+                mat_exib = ""
+            elif matricula == "SERVIDOR":
+                mat_exib = "Servidor"
+            elif matricula.startswith("SRV-"):
+                mat_exib = "servidor"
+            else:
+                mat_exib = matricula
 
-            estado = self._sort_state.get(mes)
-            if estado:
-                self._ordenar(estado[0], mes)
+            # Zebra striping: ATIVO rows get special background, others get zebra
+            if status == "ATIVO":
+                tags = (str(rid), status)
+            else:
+                tags = (str(rid), status, str(i % 2))
 
+            self.tree.insert(
+                "", "end",
+                values=(nome, mat_exib, entrada, saida or "", tempo, maquina or "-"),
+                tags=tags,
+            )
+
+        self.lbl_registros.config(text=f"Registros: {len(registros)}")
         self._atualizar_dashboard()
 
     def _atualizar_dashboard(self):
@@ -1026,107 +1109,94 @@ class App:
     # ── Tema ─────────────────────────────────
 
     def _toggle_tema(self):
-        self.config["theme"] = "dark" if self.config["theme"] == "light" else "light"
+        self.config["theme"] = "light" if self.config["theme"] == "dark" else "dark"
         save_config(self.config)
+        self._tema_escuro = (self.config["theme"] == "dark")
         self._aplicar_tema()
         self._atualizar_lista()
 
     def _aplicar_tema(self):
         t = TEMAS[self.config["theme"]]
-        bg, fg, field, select = t["bg"], t["fg"], t["field"], t["select"]
+        bg, fg, field, select, row_a, row_b, ativo_bg = (
+            t["bg"], t["fg"], t["field"], t["select"], t["row_a"], t["row_b"], t["ativo_bg"]
+        )
 
         style = ttk.Style()
         style.theme_use("default")
 
         self.root.configure(bg=bg)
-        self.top.configure(bg=bg)
-        self.lbl_status.configure(bg=field, fg=fg)
+        self.header.configure(bg=bg)
+        self.toolbar.configure(bg=bg)
+        self.tree_frame.configure(bg=bg)
+        self.bottom_bar.configure(bg=bg)
+        if hasattr(self, 'frame_mes'):
+            self.frame_mes.configure(bg=bg)
+
+        self.sep_header.configure(bg=field)
+
+        self.lbl_title.configure(bg=bg, fg=fg)
         self.lbl_dashboard.configure(bg=bg, fg=fg)
         self.lbl_clock.configure(bg=bg, fg=fg)
+        self.lbl_mes.configure(bg=bg, fg=fg)
+        self.lbl_selecionados.configure(bg=bg, fg=fg)
+        self.lbl_registros.configure(bg=bg, fg=fg)
+        self.lbl_status.configure(bg=bg, fg=fg)
 
-        for widget in self.top.winfo_children():
-            if isinstance(widget, ttk.Widget):
-                continue
-            if isinstance(widget, tk.Label):
-                widget.configure(bg=bg, fg=fg)
-            elif isinstance(widget, tk.Button):
-                widget.configure(bg=field, fg=fg, activebackground=select)
-            elif isinstance(widget, tk.Entry):
-                widget.configure(bg=field, fg=fg, insertbackground=fg)
+        # Toolbar buttons
+        self.btn_entrada.configure(bg=field, fg=fg, activebackground=select, disabledforeground="#888888")
+        self.btn_saida.configure(bg=field, fg=fg, activebackground=select, disabledforeground="#888888")
+        self.btn_desfazer.configure(bg=field, fg=fg, activebackground=select)
 
-        for widgets in self._tab_widgets.values():
-            bar = widgets.get("bar")
-            btn = widgets.get("btn_saida")
-            btn_d = widgets.get("btn_desfazer")
-            lbl = widgets.get("lbl_acao")
-            if bar:
-                bar.configure(bg=bg)
-            if btn:
-                btn.configure(bg=field, fg=fg, activebackground=select,
-                              disabledforeground="#888888")
-            if btn_d:
-                btn_d.configure(bg=field, fg=fg, activebackground=select)
-            if lbl:
-                lbl.configure(bg=bg, fg=fg)
+        # Style filter buttons in header
+        for nome, btn in self._btns_filtro.items():
+            ativo = nome == self.var_filtro.get()
+            btn.configure(
+                bg=select if ativo else field, fg=fg,
+                activebackground=select,
+                relief="sunken" if ativo else "raised",
+            )
 
-        # Barra de filtro
-        self.bar_filtro.configure(bg=bg)
-        for child in self.bar_filtro.winfo_children():
-            if isinstance(child, tk.Label):
-                child.configure(bg=bg, fg=fg)
-            elif isinstance(child, tk.Button):
-                nome = child.cget("text")
-                ativo = nome == self.var_filtro.get()
-                child.configure(
-                    bg=select if ativo else field, fg=fg,
-                    activebackground=select,
-                    relief="sunken" if ativo else "raised",
-                )
+        if not self.entry_matricula.get() or self.entry_matricula.get() == "Matrícula":
+            self.entry_matricula.configure(bg=field, fg="#B5BAC1", insertbackground=fg, disabledbackground=field)
+        else:
+            self.entry_matricula.configure(bg=field, fg=fg, insertbackground=fg, disabledbackground=field)
 
-        style.configure("Treeview",
-            background=bg, foreground=fg, fieldbackground=bg)
-        style.map("Treeview",
-            background=[("selected", select)])
-        style.configure("Treeview.Heading",
-            background=field, foreground=fg)
+        # Configure dark theme for all ttk widgets
+        style.configure("TFrame", background=bg, foreground=fg)
+        style.configure("TLabel", background=bg, foreground=fg)
+        style.configure("TButton", background=field, foreground=fg)
         style.configure("TCombobox",
-            fieldbackground=field, background=field, foreground=fg, arrowcolor=fg)
+            fieldbackground=field, background=field, foreground=fg)
         style.map("TCombobox",
             fieldbackground=[("readonly", field)],
             background=[("readonly", field)],
-            foreground=[("readonly", fg)],
-            selectbackground=[("readonly", select)],
-            selectforeground=[("readonly", fg)])
-        style.configure("TNotebook", background=bg)
-        style.configure("TNotebook.Tab", background=field, foreground=fg)
-        style.map("TNotebook.Tab",
+            foreground=[("readonly", fg)])
+
+        style.configure("Treeview",
+            background=bg, foreground=fg, fieldbackground=field,
+            borderwidth=0, highlightthickness=0)
+        style.map("Treeview",
             background=[("selected", select)])
+        style.configure("Treeview.Heading",
+            background=field, foreground=fg, borderwidth=0)
+        style.map("Treeview.Heading",
+            background=[("active", field)])
 
+        # Configure vertical scrollbar
+        style.configure("Vertical.TScrollbar",
+            background=field, troughcolor=bg, arrowcolor=fg, borderwidth=0)
+        style.map("Vertical.TScrollbar",
+            background=[("active", select)],
+            arrowcolor=[("active", select)])
+        self.tree_scroll.configure(style="Vertical.TScrollbar")
 
-        # === FALLBACK: aplica tema em qualquer widget não coberto ===
-           
-        def aplicar_em(widget):
-            if isinstance(widget, ttk.Widget):
-                return
+        # Configure menu button
+        self.btn_menu.configure(bg=field, fg=fg, activebackground=select, relief="flat")
 
-            if isinstance(widget, tk.Button):
-                widget.configure(
-                    bg=field,
-                    fg=fg,
-                    activebackground=select,
-                    disabledforeground="#888888"
-                )
-
-            elif isinstance(widget, tk.Label):
-                widget.configure(bg=bg, fg=fg)
-
-            elif isinstance(widget, tk.Entry):
-                widget.configure(bg=field, fg=fg, insertbackground=fg)
-
-            for child in widget.winfo_children():
-                aplicar_em(child)
-
-        aplicar_em(self.root)
+        self.tree.tag_configure("0", background=row_a)
+        self.tree.tag_configure("1", background=row_b)
+        self.tree.tag_configure("ATIVO", background=ativo_bg)
+        self.tree.tag_configure("FINALIZADO", background=bg)
 
     def _ao_fechar(self):
         ativos = contar_ativos()
@@ -1290,9 +1360,14 @@ class App:
         else:
             return
         if dados:
-            csv = self._gerar_csv(dados)
+            # Copiar dados na mesma ordem do CSV (sem cabeçalho)
+            linhas = []
+            for data, entrada, saida, nome, matricula, maquina, bolsista in dados:
+                mat_fmt = "" if not matricula or matricula == "SERVIDOR" else matricula
+                linhas.append(f"{data}\t{entrada}\t{saida or ''}\t{nome}\t{mat_fmt}\t{maquina or ''}\t{bolsista or ''}")
+            texto = "\n".join(linhas)
             self.root.clipboard_clear()
-            self.root.clipboard_append(csv)
+            self.root.clipboard_append(texto)
             messagebox.showinfo("Copiar Dados", "Copiado para a área de transferência")
 
     def _abrir_copiar_personalizado(self):
@@ -1334,9 +1409,12 @@ class App:
 
             periodo = var_periodo.get()
             with get_conn() as conn:
+                # Período está no formato MM/YYYY, data no formato DD/MM/YYYY
+                mes_ano = periodo.split("/")
+                # data[4:6] = MM, data[7:11] = YYYY
                 registros = conn.execute(
-                    "SELECT DISTINCT matricula, nome FROM registros WHERE strftime('%Y-%m', data) = ? ORDER BY nome",
-                    (periodo.split("/")[1] + "-" + periodo.split("/")[0],)
+                    "SELECT DISTINCT matricula, nome FROM registros WHERE substr(data, 4, 2) = ? AND substr(data, 7, 4) = ? ORDER BY nome",
+                    (mes_ano[0], mes_ano[1])
                 ).fetchall()
 
             for mat, nome in registros:
@@ -1521,7 +1599,7 @@ class App:
         tk.Button(btn_frame, text="Remover",     command=remover).pack(side="left", padx=5)
 
     def _editar_registro(self):
-        tree = self._get_tree_ativa()
+        tree = self.tree
         sel  = tree.selection()
         if not sel:
             messagebox.showinfo("Editar", "Selecione um registro primeiro.")
