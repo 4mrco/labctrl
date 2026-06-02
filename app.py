@@ -61,9 +61,10 @@ COL_NAMES = ("Nome", "Matrícula", "Entrada", "Saída", "Tempo", "Máquina")
 
 def load_config() -> dict:
     if not os.path.exists(CONFIG_FILE):
-        return {"theme": "light", "exported_months": []}
+        return {"theme": "light", "exported_months": [], "ultimo_bolsista": None}
     cfg = json.load(open(CONFIG_FILE, "r"))
     cfg.setdefault("exported_months", [])
+    cfg.setdefault("ultimo_bolsista", None)
     return cfg
 
 
@@ -452,6 +453,7 @@ class App:
         self._tick_relogio()
 
         self.root.protocol("WM_DELETE_WINDOW", self._ao_fechar)
+        self.root.bind_all("<Control-z>", self._on_ctrl_z)
         self.root.after(500, self._verificar_export_pendente)
         self.root.after(800, self._verificar_orfaos)
 
@@ -491,8 +493,12 @@ class App:
             self.top, values=buscar_bolsistas(), width=30, state="readonly"
         )
         bolsistas = buscar_bolsistas()
-        if bolsistas:
+        ultimo = self.config.get("ultimo_bolsista")
+        if ultimo and ultimo in bolsistas:
+            self.combo_bolsista.set(ultimo)
+        elif bolsistas:
             self.combo_bolsista.set(bolsistas[0])
+        self.combo_bolsista.bind("<<ComboboxSelected>>", self._on_bolsista_change)
         self.combo_bolsista.pack(side="left")
 
         self.lbl_clock = tk.Label(self.top, text="")
@@ -605,6 +611,7 @@ class App:
         tk.Button(win, text="Salvar", command=confirmar).grid(
             row=2, column=0, columnspan=2, pady=(4, 12))
         win.wait_window()
+        self._focus_matricula()
         return resultado["valor"]
 
     def status(self, msg: str, erro: bool = False):
@@ -738,12 +745,60 @@ class App:
         if not sel:
             return
         rid = int(tree.item(sel[0])["tags"][0])
+        self._registrar_saida_por_rid(rid)
+
+    def _registrar_saida_por_rid(self, rid: int):
         reg = buscar_registro_por_id(rid)
-        if reg:
-            self._registrar_saida(reg[2])  # reg[2] = matricula
+        if not reg or reg[8] != "ATIVO":
+            return
+        try:
+            finalizar_registro(rid, agora().strftime("%H:%M"))
+            self._push_undo({"tipo": "saida", "rid": rid, "nome": reg[1]})
+            self.status(f"Saída de {reg[1]} registrada.")
+        except Exception as e:
+            log.error("Falha ao registrar saída: %s", e)
+            self.status("Erro ao registrar saída.", erro=True)
+        self._atualizar_lista()
+        self._focus_matricula()
+
+    def _registrar_saida(self, matricula: str):
+        rid = buscar_registro_ativo(matricula)
+        if rid:
+            try:
+                nome = (buscar_aluno(matricula) or (matricula,))[0]
+                finalizar_registro(rid, agora().strftime("%H:%M"))
+                self._push_undo({"tipo": "saida", "rid": rid, "nome": nome})
+                self.status(f"Saída de {nome} registrada.")
+            except Exception as e:
+                log.error("Falha ao registrar saída: %s", e)
+                self.status("Erro ao registrar saída.", erro=True)
+        self._atualizar_lista()
+        self._focus_matricula()
 
     def _push_undo(self, acao: dict):
         self._undo_stack.append(acao)
+
+    def _focus_matricula(self):
+        """Retorna foco para entry_matricula com texto selecionado se houver."""
+        self.entry_matricula.focus()
+        if self.entry_matricula.get():
+            self.entry_matricula.select_range(0, tk.END)
+
+    def _on_ctrl_z(self, event=None):
+        """Handler para Ctrl+Z global que protege widgets de texto."""
+        widget = self.root.focus_get()
+        # Protege widgets Entry e Text para não interferir em edição
+        if isinstance(widget, (tk.Entry, tk.Text)):
+            return
+        self._desfazer()
+        self.status("Última ação desfeita (Ctrl+Z).")
+
+    def _on_bolsista_change(self, event=None):
+        """Salva o bolsista selecionado ao mudar a escolha."""
+        selecionado = self.combo_bolsista.get()
+        if selecionado:
+            self.config["ultimo_bolsista"] = selecionado
+            save_config(self.config)
 
     def _desfazer(self):
         if not self._undo_stack:
@@ -787,6 +842,7 @@ class App:
 
         self._rebuild_abas()
         self._atualizar_lista()
+        self._focus_matricula()
 
     def _fluxo_entrada(self, matricula: str | None, nome: str) -> bool:
         if matricula:
@@ -839,6 +895,7 @@ class App:
             if self._fluxo_entrada(mat_db, nome):
                 self._rebuild_abas()
                 self._atualizar_lista()
+            self._focus_matricula()
             return
 
         resultado = buscar_aluno(matricula)
@@ -859,19 +916,7 @@ class App:
         if self._fluxo_entrada(matricula, nome):
             self._rebuild_abas()
             self._atualizar_lista()
-
-    def _registrar_saida(self, matricula: str):
-        rid = buscar_registro_ativo(matricula)
-        if rid:
-            try:
-                nome = (buscar_aluno(matricula) or (matricula,))[0]
-                finalizar_registro(rid, agora().strftime("%H:%M"))
-                self._push_undo({"tipo": "saida", "rid": rid, "nome": nome})
-                self.status(f"Saída de {nome} registrada.")
-            except Exception as e:
-                log.error("Falha ao registrar saída: %s", e)
-                self.status("Erro ao registrar saída.", erro=True)
-        self._atualizar_lista()
+        self._focus_matricula()
 
     def _remover_registro(self):
         tree = self._get_tree_ativa()
@@ -896,6 +941,7 @@ class App:
                 })
                 deletar_registro(rid)
                 self.status("Registro removido.")
+                self._focus_matricula()
             except Exception as e:
                 self._undo_stack.pop()  # descarta o undo se falhou
                 log.error("Falha ao remover: %s", e)
@@ -1408,6 +1454,7 @@ class App:
                 deletar_bolsista(nome)
                 lista.delete(sel)
                 self.combo_bolsista["values"] = buscar_bolsistas()
+                self._focus_matricula()
 
         tk.Button(win, text="Adicionar", command=adicionar).pack()
         tk.Button(win, text="Remover",   command=remover).pack()
@@ -1466,6 +1513,7 @@ class App:
                     parent=win):
                 deletar_aluno(matricula)
                 recarregar()
+                self._focus_matricula()
 
         btn_frame = tk.Frame(win)
         btn_frame.pack(pady=(0, 8))
