@@ -497,12 +497,11 @@ class App:
         self.toolbar.pack(fill="x", padx=12, pady=8)
 
         # Matrícula entry with placeholder
-        self.entry_matricula = tk.Entry(self.toolbar, width=16, validate="key")
-        self.entry_matricula["validatecommand"] = (
-            self.root.register(lambda P: P.isdigit() and len(P) <= 6 or P == ""), "%P"
-        )
+        self.entry_matricula = tk.Entry(self.toolbar, width=16)
         self.entry_matricula.pack(side="left", padx=(0, 8))
         self.entry_matricula.bind("<Return>", self.registrar_entrada)
+        self.entry_matricula.bind("<Tab>", self._focus_maquina)
+        self.entry_matricula.bind("<KeyRelease>", self._validate_matricula)
         self.entry_matricula.focus()
 
         # Placeholder handling - entry uses normal text variable, placeholder drawn manually
@@ -525,9 +524,13 @@ class App:
         # Máquina combobox
         self.combo_maquina = ttk.Combobox(
             self.toolbar, values=["-", "ML"] + [f"{i:02}" for i in range(1, 21)],
-            width=6, state="readonly",
+            width=6, state="normal",
         )
         self.combo_maquina.set("-")
+        self.combo_maquina.bind("<Return>", self.registrar_entrada)
+        self.combo_maquina.bind("<Tab>", self._focus_bolsista)
+        self.combo_maquina.bind("<FocusIn>", self._on_maquina_focus_in)
+        self.combo_maquina.bind("<KeyRelease>", self._validate_maquina)
         self.combo_maquina.pack(side="left", padx=8)
 
         # Bolsista combobox
@@ -541,6 +544,9 @@ class App:
         elif bolsistas:
             self.combo_bolsista.set(bolsistas[0])
         self.combo_bolsista.bind("<<ComboboxSelected>>", self._on_bolsista_change)
+        self.combo_bolsista.bind("<Return>", self.registrar_entrada)
+        self.combo_bolsista.bind("<Tab>", self._focus_matricula_from_bolsista)
+        self.combo_bolsista.bind("<FocusIn>", self._on_bolsista_focus_in)
         self.combo_bolsista.pack(side="left", padx=8)
 
         # ENTRADA button
@@ -549,7 +555,7 @@ class App:
         self.btn_entrada.pack(side="left", padx=(12, 0))
 
         # ── MENU POPUP ──────────────────────────
-        self.btn_menu = tk.Button(self.header, text="[≡]", width=3, relief="flat")
+        self.btn_menu = tk.Button(self.header, text="≡", width=3, relief="flat")
         self.btn_menu.pack(side="right", padx=8)
         self.btn_menu.bind("<Button-1>", lambda e: self.menu.tk_popup(e.x_root, e.y_root))
 
@@ -625,6 +631,69 @@ class App:
         if not self._ph_matricula.get():
             self._ph_matricula.set("Matrícula")
             self.entry_matricula.configure(fg="#B5BAC1")
+
+    def _focus_maquina(self, event):
+        self.combo_maquina.focus()
+        self.combo_maquina.selection_range(0, tk.END)
+        return "break"
+
+    def _focus_bolsista(self, event):
+        self.combo_bolsista.focus()
+        self.combo_bolsista.selection_range(0, tk.END)
+        return "break"
+
+    def _focus_matricula_from_bolsista(self, event):
+        self.entry_matricula.focus()
+        self.entry_matricula.selection_range(0, tk.END)
+        return "break"
+
+    def _on_maquina_focus_in(self, event):
+        self.combo_maquina.selection_range(0, tk.END)
+
+    def _on_bolsista_focus_in(self, event):
+        self.combo_bolsista.selection_range(0, tk.END)
+
+    def _validate_matricula(self, event):
+        """Filter matricula input to allow only digits, max 6 chars."""
+        valor = self.entry_matricula.get()
+        if valor == "" or valor.isdigit():
+            if len(valor) > 6:
+                self.entry_matricula.delete(0, tk.END)
+                self.entry_matricula.insert(0, valor[:6])
+        else:
+            # Remove non-digits
+            cleaned = "".join(c for c in valor if c.isdigit())
+            self.entry_matricula.delete(0, tk.END)
+            self.entry_matricula.insert(0, cleaned[:6])
+
+    def _validate_maquina(self, event):
+        """Filter maquina input to allow only valid values as user types."""
+        valor = self.combo_maquina.get().upper()
+        valid_values = ["-", "ML"] + [f"{i:02}" for i in range(1, 21)]
+        # Allow valid values or partial input for ML
+        if valor in valid_values or valor == "":
+            return True
+        if valor.startswith("ML"):
+            return True  # Allow "ML" to be typed
+        # Check if it's a valid number being typed
+        if valor.isdigit():
+            try:
+                num = int(valor)
+                if 1 <= num <= 20:
+                    return True  # Allow valid machine numbers
+                elif num < 1:
+                    self.combo_maquina.set("-")  # Clamp to "-"
+                else:
+                    self.combo_maquina.set("20")  # Clamp to "20"
+            except:
+                self.combo_maquina.set("-")
+        elif len(valor) > 1 and valor[:-1].isdigit() and valor[-1].isdigit():
+            # Still typing a number, allow it
+            return True
+        else:
+            # Invalid input, reset to last valid
+            self.combo_maquina.set("-")
+        return True
 
     def _build_menu(self):
         self.menu = tk.Menu(self.root, tearoff=0)
@@ -966,9 +1035,9 @@ class App:
                 return
             nome, tipo = res
             mat_db = None if tipo == "Aluno" else "SERVIDOR"
-            self._ph_matricula.set("Matrícula")
             if self._fluxo_entrada(mat_db, nome):
                 self._rebuild_abas()
+                self._ph_matricula.set("Matrícula")
             self._focus_matricula()
             return
 
@@ -986,10 +1055,17 @@ class App:
         else:
             nome = resultado[0]
 
-        self._ph_matricula.set("Matrícula")
         if self._fluxo_entrada(matricula, nome):
             self._rebuild_abas()
-        self._focus_matricula()
+            # Reset fields for next registration
+            self._ph_matricula.set("")
+            self.combo_maquina.set("-")
+            self.entry_matricula.focus()
+            self.entry_matricula.selection_range(0, tk.END)
+        else:
+            # Only reset to placeholder if registration failed
+            self._ph_matricula.set("Matrícula")
+            self._focus_matricula()
 
     def _remover_registro(self):
         tree = self.tree
@@ -1166,7 +1242,8 @@ class App:
         style.configure("TLabel", background=bg, foreground=fg)
         style.configure("TButton", background=field, foreground=fg)
         style.configure("TCombobox",
-            fieldbackground=field, background=field, foreground=fg)
+            fieldbackground=field, background=field, foreground=fg,
+            borderwidth=0, highlightthickness=0)
         style.map("TCombobox",
             fieldbackground=[("readonly", field)],
             background=[("readonly", field)],
@@ -1618,11 +1695,13 @@ class App:
         win.resizable(False, False)
 
         campos = {}
+        ordem_campos = []  # Track field order for keyboard navigation
+
         defs   = [
-            ("Data (DD/MM/AAAA)", data),
-            ("Entrada (HH:MM)",   entrada),
-            ("Saída (HH:MM)",     saida or ""),
-            ("Máquina",           maquina or ""),
+            ("Data (DD/MM/AAAA)",   data),
+            ("Entrada (HH:MM)",     entrada),
+            ("Saída (HH:MM)",       saida or ""),
+            ("Máquina",             maquina or ""),
         ]
         for i, (label, valor) in enumerate(defs):
             tk.Label(win, text=label).grid(row=i, column=0, sticky="w", padx=10, pady=4)
@@ -1630,12 +1709,70 @@ class App:
             e.insert(0, valor)
             e.grid(row=i, column=1, padx=10, pady=4)
             campos[label] = e
+            ordem_campos.append(e)
+
+        def format_hora_on_save(valor):
+            """Format HHMM -> HH:MM only on save/focus-out."""
+            if not valor:
+                return valor
+            nums = "".join(c for c in valor if c.isdigit())
+            if len(nums) == 4:
+                return f"{nums[:2]}:{nums[2:]}"
+            elif len(nums) == 3:
+                return f"0{nums[:1]}:{nums[1:]}"
+            return valor
+
+        def format_maquina_on_save(valor):
+            """Pad single digit machine number only on save/focus-out."""
+            if valor and valor not in ("-", "ML") and len(valor) == 1 and valor.isdigit():
+                return valor.zfill(2)
+            return valor
+
+        def focus_proximo(event):
+            atual = ordem_campos.index(event.widget)
+            proximo = (atual + 1) % len(ordem_campos)
+            ordem_campos[proximo].focus()
+            return "break"
+
+        def focus_anterior(event):
+            atual = ordem_campos.index(event.widget)
+            anterior = (atual - 1) % len(ordem_campos)
+            ordem_campos[anterior].focus()
+            return "break"
+
+        # Bind keyboard navigation
+        for campo in ordem_campos:
+            campo.bind("<Tab>", focus_proximo)
+            campo.bind("<Shift-Tab>", focus_anterior)
+            campo.bind("<Down>", focus_proximo)
+            campo.bind("<Up>", focus_anterior)
+
+        def format_fields_on_focus_out(event):
+            """Format hora and maquina fields when they lose focus."""
+            widget = event.widget
+            label = None
+            for l, c in campos.items():
+                if c == widget:
+                    label = l
+                    break
+            if label == "Entrada (HH:MM)" or label == "Saída (HH:MM)":
+                valor = format_hora_on_save(widget.get().strip())
+                widget.delete(0, tk.END)
+                widget.insert(0, valor)
+            elif label == "Máquina":
+                valor = format_maquina_on_save(widget.get().strip())
+                widget.delete(0, tk.END)
+                widget.insert(0, valor)
+
+        # Bind focus-out formatting
+        for label in ["Entrada (HH:MM)", "Saída (HH:MM)", "Máquina"]:
+            campos[label].bind("<FocusOut>", format_fields_on_focus_out)
 
         def salvar():
             nova_data    = campos["Data (DD/MM/AAAA)"].get().strip()
-            nova_entrada = campos["Entrada (HH:MM)"].get().strip()
-            nova_saida   = campos["Saída (HH:MM)"].get().strip()
-            nova_maquina = campos["Máquina"].get().strip()
+            nova_entrada = format_hora_on_save(campos["Entrada (HH:MM)"].get().strip())
+            nova_saida   = format_hora_on_save(campos["Saída (HH:MM)"].get().strip())
+            nova_maquina = format_maquina_on_save(campos["Máquina"].get().strip())
             try:
                 datetime.strptime(nova_data, "%d/%m/%Y")
                 dt_entrada = datetime.strptime(nova_entrada, "%H:%M")
