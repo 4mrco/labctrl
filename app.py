@@ -484,6 +484,7 @@ class App:
             b = tk.Button(
                 self.header, text=opcao, width=7,
                 command=lambda o=opcao: self._set_filtro(o),
+                bd=0, highlightthickness=0,
             )
             b.pack(side="left", padx=2)
             self._btns_filtro[opcao] = b
@@ -497,7 +498,7 @@ class App:
         self.toolbar.pack(fill="x", padx=12, pady=8)
 
         # Matrícula entry with placeholder
-        self.entry_matricula = tk.Entry(self.toolbar, width=16)
+        self.entry_matricula = tk.Entry(self.toolbar, width=16, bd=0, highlightthickness=0)
         self.entry_matricula.pack(side="left", padx=(0, 8))
         self.entry_matricula.bind("<Return>", self.registrar_entrada)
         self.entry_matricula.bind("<Tab>", self._focus_maquina)
@@ -551,11 +552,12 @@ class App:
 
         # ENTRADA button
         self.btn_entrada = tk.Button(self.toolbar, text="ENTRADA",
-                                     command=self.registrar_entrada, width=10)
+                                     command=self.registrar_entrada, width=10,
+                                     bd=0, highlightthickness=0)
         self.btn_entrada.pack(side="left", padx=(12, 0))
 
         # ── MENU POPUP ──────────────────────────
-        self.btn_menu = tk.Button(self.header, text="≡", width=3, relief="flat")
+        self.btn_menu = tk.Button(self.header, text="⋮", width=1, relief="flat", bd=0, highlightthickness=0, font=(None, -20))
         self.btn_menu.pack(side="right", padx=8)
         self.btn_menu.bind("<Button-1>", lambda e: self.menu.tk_popup(e.x_root, e.y_root))
 
@@ -615,11 +617,13 @@ class App:
 
         # Bottom bar action buttons
         self.btn_saida = tk.Button(self.bottom_bar, text="Registrar Saída",
-                                   command=self._saida_selecionado, state="disabled", width=12)
+                                   command=self._saida_selecionado, state="disabled", width=12,
+                                   bd=0, highlightthickness=0)
         self.btn_saida.pack(side="right", padx=6)
 
         self.btn_desfazer = tk.Button(self.bottom_bar, text="↶",
-                                      command=self._desfazer, width=3)
+                                      command=self._desfazer, width=3,
+                                      bd=0, highlightthickness=0)
         self.btn_desfazer.pack(side="right", padx=4)
 
     def _on_entry_focus(self, event):
@@ -747,7 +751,7 @@ class App:
         win.grab_set()
 
         tk.Label(win, text="Nome:").grid(row=0, column=0, sticky="w", padx=10, pady=(12, 4))
-        entry_nome = tk.Entry(win, width=28)
+        entry_nome = tk.Entry(win, width=28, bd=0, highlightthickness=0)
         entry_nome.grid(row=0, column=1, padx=10, pady=(12, 4))
         entry_nome.focus()
 
@@ -755,8 +759,8 @@ class App:
         var_tipo = tk.StringVar(value="Aluno")
         frame_tipo = tk.Frame(win)
         frame_tipo.grid(row=1, column=1, sticky="w", padx=10, pady=4)
-        tk.Radiobutton(frame_tipo, text="Aluno",    variable=var_tipo, value="Aluno").pack(side="left")
-        tk.Radiobutton(frame_tipo, text="Servidor", variable=var_tipo, value="Servidor").pack(side="left")
+        tk.Radiobutton(frame_tipo, text="Aluno",    variable=var_tipo, value="Aluno", bd=0, highlightthickness=0).pack(side="left")
+        tk.Radiobutton(frame_tipo, text="Servidor", variable=var_tipo, value="Servidor", bd=0, highlightthickness=0).pack(side="left")
 
         resultado = {"valor": None}
 
@@ -769,7 +773,7 @@ class App:
 
         entry_nome.bind("<Return>", confirmar)
         win.bind("<Return>", confirmar)
-        tk.Button(win, text="Salvar", command=confirmar).grid(
+        tk.Button(win, text="Salvar", command=confirmar, bd=0, highlightthickness=0).grid(
             row=2, column=0, columnspan=2, pady=(4, 12))
         win.wait_window()
         self._focus_matricula()
@@ -1219,9 +1223,12 @@ class App:
         self.lbl_status.configure(bg=bg, fg=fg)
 
         # Toolbar buttons
-        self.btn_entrada.configure(bg=field, fg=fg, activebackground=select, disabledforeground="#888888")
-        self.btn_saida.configure(bg=field, fg=fg, activebackground=select, disabledforeground="#888888")
-        self.btn_desfazer.configure(bg=field, fg=fg, activebackground=select)
+        self.btn_entrada.configure(bg=field, fg=fg, activebackground=select, disabledforeground="#888888",
+                                   relief="flat", bd=0, highlightthickness=0)
+        self.btn_saida.configure(bg=field, fg=fg, activebackground=select, disabledforeground="#888888",
+                                 relief="flat", bd=0, highlightthickness=0)
+        self.btn_desfazer.configure(bg=field, fg=fg, activebackground=select,
+                                     relief="flat", bd=0, highlightthickness=0)
 
         # Style filter buttons in header
         for nome, btn in self._btns_filtro.items():
@@ -1230,17 +1237,20 @@ class App:
                 bg=select if ativo else field, fg=fg,
                 activebackground=select,
                 relief="sunken" if ativo else "raised",
+                bd=0, highlightthickness=0,
             )
 
         if not self.entry_matricula.get() or self.entry_matricula.get() == "Matrícula":
-            self.entry_matricula.configure(bg=field, fg="#B5BAC1", insertbackground=fg, disabledbackground=field)
+            self.entry_matricula.configure(bg=field, fg="#B5BAC1", insertbackground=fg, disabledbackground=field,
+                                           bd=0, highlightthickness=0)
         else:
-            self.entry_matricula.configure(bg=field, fg=fg, insertbackground=fg, disabledbackground=field)
+            self.entry_matricula.configure(bg=field, fg=fg, insertbackground=fg, disabledbackground=field,
+                                           bd=0, highlightthickness=0)
 
         # Configure dark theme for all ttk widgets
         style.configure("TFrame", background=bg, foreground=fg)
         style.configure("TLabel", background=bg, foreground=fg)
-        style.configure("TButton", background=field, foreground=fg)
+        style.configure("TButton", background=field, foreground=fg, borderwidth=0, highlightthickness=0)
         style.configure("TCombobox",
             fieldbackground=field, background=field, foreground=fg,
             borderwidth=0, highlightthickness=0)
@@ -1255,13 +1265,13 @@ class App:
         style.map("Treeview",
             background=[("selected", select)])
         style.configure("Treeview.Heading",
-            background=field, foreground=fg, borderwidth=0)
+            background=field, foreground=fg, borderwidth=0, highlightthickness=0)
         style.map("Treeview.Heading",
             background=[("active", field)])
 
         # Configure vertical scrollbar
         style.configure("Vertical.TScrollbar",
-            background=field, troughcolor=bg, arrowcolor=fg, borderwidth=0)
+            background=field, troughcolor=bg, arrowcolor=fg, borderwidth=0, highlightthickness=0)
         style.map("Vertical.TScrollbar",
             background=[("active", select)],
             arrowcolor=[("active", select)])
@@ -1476,7 +1486,7 @@ class App:
             for var in var_alunos.values():
                 var.set(var_todos.get())
 
-        tk.Checkbutton(scroll_frame, text="Todos", variable=var_todos, command=toggle_todos).pack(anchor="w")
+        tk.Checkbutton(scroll_frame, text="Todos", variable=var_todos, command=toggle_todos, bd=0, highlightthickness=0).pack(anchor="w")
 
         def atualizar_alunos():
             for cb in aluno_cbs:
@@ -1497,7 +1507,7 @@ class App:
             for mat, nome in registros:
                 var = tk.IntVar()
                 var_alunos[mat] = var
-                cb = tk.Checkbutton(scroll_frame, text=f"{nome} - {mat}", variable=var)
+                cb = tk.Checkbutton(scroll_frame, text=f"{nome} - {mat}", variable=var, bd=0, highlightthickness=0)
                 cb.pack(anchor="w")
                 aluno_cbs.append(cb)
 
@@ -1530,7 +1540,7 @@ class App:
             win.destroy()
             messagebox.showinfo("Copiar Dados", "Copiado para a área de transferência")
 
-        tk.Button(win, text="COPIAR CSV", command=copiar).grid(row=2, column=0, columnspan=2, pady=12)
+        tk.Button(win, text="COPIAR CSV", command=copiar, bd=0, highlightthickness=0).grid(row=2, column=0, columnspan=2, pady=12)
         win.bind("<Return>", lambda _: copiar())
 
     # ── Janelas auxiliares ────────────────────
@@ -1544,7 +1554,7 @@ class App:
         top_bar.pack(fill="x", padx=6, pady=(6, 2))
         tk.Label(top_bar, text="🔍").pack(side="left")
         var_busca = tk.StringVar()
-        tk.Entry(top_bar, textvariable=var_busca, width=30).pack(side="left", padx=4)
+        tk.Entry(top_bar, textvariable=var_busca, width=30, bd=0, highlightthickness=0).pack(side="left", padx=4)
 
         nb = ttk.Notebook(win)
         nb.pack(fill="both", expand=True, padx=6, pady=4)
@@ -1611,8 +1621,8 @@ class App:
                 self.combo_bolsista["values"] = buscar_bolsistas()
                 self._focus_matricula()
 
-        tk.Button(win, text="Adicionar", command=adicionar).pack()
-        tk.Button(win, text="Remover",   command=remover).pack()
+        tk.Button(win, text="Adicionar", command=adicionar, bd=0, highlightthickness=0).pack()
+        tk.Button(win, text="Remover",   command=remover, bd=0, highlightthickness=0).pack()
 
     def _abrir_alunos(self):
         win = tk.Toplevel(self.root)
@@ -1625,7 +1635,7 @@ class App:
         tk.Label(search_frame, text="Filtrar (nome ou matrícula):").pack(side="left")
         filtro_var = tk.StringVar()
         filtro_var.trace("w", lambda *_: recarregar())
-        filtro_entry = tk.Entry(search_frame, textvariable=filtro_var)
+        filtro_entry = tk.Entry(search_frame, textvariable=filtro_var, bd=0, highlightthickness=0)
         filtro_entry.pack(side="left", fill="x", expand=True, padx=(5, 0))
         filtro_entry.focus()
 
@@ -1672,8 +1682,8 @@ class App:
 
         btn_frame = tk.Frame(win)
         btn_frame.pack(pady=(0, 8))
-        tk.Button(btn_frame, text="Editar nome", command=editar).pack(side="left", padx=5)
-        tk.Button(btn_frame, text="Remover",     command=remover).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Editar nome", command=editar, bd=0, highlightthickness=0).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Remover",     command=remover, bd=0, highlightthickness=0).pack(side="left", padx=5)
 
     def _editar_registro(self):
         tree = self.tree
@@ -1705,7 +1715,7 @@ class App:
         ]
         for i, (label, valor) in enumerate(defs):
             tk.Label(win, text=label).grid(row=i, column=0, sticky="w", padx=10, pady=4)
-            e = tk.Entry(win, width=20)
+            e = tk.Entry(win, width=20, bd=0, highlightthickness=0)
             e.insert(0, valor)
             e.grid(row=i, column=1, padx=10, pady=4)
             campos[label] = e
@@ -1805,7 +1815,7 @@ class App:
             self._rebuild_abas()
             self._atualizar_lista()
 
-        tk.Button(win, text="Salvar", command=salvar).grid(
+        tk.Button(win, text="Salvar", command=salvar, bd=0, highlightthickness=0).grid(
             row=len(defs), column=0, columnspan=2, pady=10)
         win.bind("<Return>", lambda _: salvar())
 
@@ -1814,7 +1824,7 @@ class App:
         win.title(titulo)
         tk.Label(win, text=mensagem).pack(padx=10, pady=(10, 0))
 
-        entry = tk.Entry(win)
+        entry = tk.Entry(win, bd=0, highlightthickness=0)
         entry.pack(padx=10, pady=5)
         entry.focus()
 
@@ -1825,7 +1835,7 @@ class App:
             win.destroy()
 
         entry.bind("<Return>", lambda _: confirmar())
-        tk.Button(win, text="OK", command=confirmar).pack(pady=(0, 10))
+        tk.Button(win, text="OK", command=confirmar, bd=0, highlightthickness=0).pack(pady=(0, 10))
         win.wait_window()
         return resultado["valor"]
 
