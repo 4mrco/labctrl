@@ -559,7 +559,7 @@ class App:
         # ── MENU POPUP ──────────────────────────
         self.btn_menu = tk.Button(self.header, text="⋮", width=1, relief="flat", bd=0, highlightthickness=0, font=(None, -20))
         self.btn_menu.pack(side="right", padx=8)
-        self.btn_menu.bind("<Button-1>", lambda e: self.menu.tk_popup(e.x_root, e.y_root))
+        self.btn_menu.bind("<ButtonRelease-1>", lambda e: self.menu.tk_popup(e.x_root, e.y_root))
 
         self.menu = tk.Menu(self.root, tearoff=0)
         self.menu.add_command(label="Editar selecionado", command=self._editar_registro)
@@ -745,19 +745,22 @@ class App:
 
     def _popup_sem_matricula(self) -> tuple[str, str] | None:
         """Retorna (nome, tipo) ou None se cancelado."""
+        t = TEMAS[self.config["theme"]]
+        bg, fg, field = t["bg"], t["fg"], t["field"]
         win = tk.Toplevel(self.root)
         win.title("Entrada sem matrícula")
         win.resizable(False, False)
         win.grab_set()
+        win.configure(bg=bg)
 
         tk.Label(win, text="Nome:").grid(row=0, column=0, sticky="w", padx=10, pady=(12, 4))
-        entry_nome = tk.Entry(win, width=28, bd=0, highlightthickness=0)
+        entry_nome = tk.Entry(win, width=28, bd=0, highlightthickness=0, bg=field, fg=fg)
         entry_nome.grid(row=0, column=1, padx=10, pady=(12, 4))
         entry_nome.focus()
 
         tk.Label(win, text="Tipo:").grid(row=1, column=0, sticky="w", padx=10, pady=4)
         var_tipo = tk.StringVar(value="Aluno")
-        frame_tipo = tk.Frame(win)
+        frame_tipo = tk.Frame(win, bg=bg)
         frame_tipo.grid(row=1, column=1, sticky="w", padx=10, pady=4)
         tk.Radiobutton(frame_tipo, text="Aluno",    variable=var_tipo, value="Aluno", bd=0, highlightthickness=0).pack(side="left")
         tk.Radiobutton(frame_tipo, text="Servidor", variable=var_tipo, value="Servidor", bd=0, highlightthickness=0).pack(side="left")
@@ -1200,6 +1203,7 @@ class App:
         bg, fg, field, select, row_a, row_b, ativo_bg = (
             t["bg"], t["fg"], t["field"], t["select"], t["row_a"], t["row_b"], t["ativo_bg"]
         )
+        select_btn = "#35383e"  # Slightly darker than select for buttons
 
         style = ttk.Style()
         style.theme_use("default")
@@ -1247,10 +1251,13 @@ class App:
             self.entry_matricula.configure(bg=field, fg=fg, insertbackground=fg, disabledbackground=field,
                                            bd=0, highlightthickness=0)
 
+        # Define a slightly darker selection color for buttons
+        select_btn = "#35383e"  # Slightly darker than select (#404249)
+
         # Configure dark theme for all ttk widgets
         style.configure("TFrame", background=bg, foreground=fg)
         style.configure("TLabel", background=bg, foreground=fg)
-        style.configure("TButton", background=field, foreground=fg, borderwidth=0, highlightthickness=0)
+        style.configure("TButton", background=select_btn, foreground=fg, borderwidth=0, highlightthickness=0)
         style.configure("TCombobox",
             fieldbackground=field, background=field, foreground=fg,
             borderwidth=0, highlightthickness=0)
@@ -1279,6 +1286,17 @@ class App:
 
         # Configure menu button
         self.btn_menu.configure(bg=field, fg=fg, activebackground=select, relief="flat")
+
+        # Configure menus with dark theme
+        self.menu.configure(background=bg, foreground=fg,
+                           activebackground=select, activeforeground=fg,
+                           bd=0, relief="flat")
+        # Reconfigure export_menu - it's a child of self.menu
+        for item in self.menu.winfo_children():
+            if isinstance(item, tk.Menu):
+                item.configure(background=bg, foreground=fg,
+                              activebackground=select, activeforeground=fg,
+                              bd=0, relief="flat")
 
         self.tree.tag_configure("0", background=row_a)
         self.tree.tag_configure("1", background=row_b)
@@ -1458,16 +1476,19 @@ class App:
             messagebox.showinfo("Copiar Dados", "Copiado para a área de transferência")
 
     def _abrir_copiar_personalizado(self):
+        t = TEMAS[self.config["theme"]]
+        bg, fg, field, select = t["bg"], t["fg"], t["field"], t["select"]
         win = tk.Toplevel(self.root)
         win.title("Copiar dados para planilha")
         win.resizable(False, False)
         win.grab_set()
+        win.configure(bg=bg)
 
         var_periodo = tk.StringVar(value=self._mes_ativo())
         periodo_cb = ttk.Combobox(win, textvariable=var_periodo, values=buscar_meses(), width=15, state="readonly")
         periodo_cb.grid(row=0, column=0, columnspan=2, padx=10, pady=(12, 4))
 
-        frame_alunos = tk.Frame(win)
+        frame_alunos = tk.Frame(win, bg=bg)
         frame_alunos.grid(row=1, column=0, columnspan=2, padx=10, pady=4)
         canvas = tk.Canvas(frame_alunos, width=280, height=200)
         scrollbar = ttk.Scrollbar(frame_alunos, orient="vertical", command=canvas.yview)
@@ -1486,7 +1507,8 @@ class App:
             for var in var_alunos.values():
                 var.set(var_todos.get())
 
-        tk.Checkbutton(scroll_frame, text="Todos", variable=var_todos, command=toggle_todos, bd=0, highlightthickness=0).pack(anchor="w")
+        tk.Checkbutton(scroll_frame, text="Todos", variable=var_todos, command=toggle_todos, bd=0, highlightthickness=0,
+                       bg=bg, fg=fg).pack(anchor="w")
 
         def atualizar_alunos():
             for cb in aluno_cbs:
@@ -1507,7 +1529,8 @@ class App:
             for mat, nome in registros:
                 var = tk.IntVar()
                 var_alunos[mat] = var
-                cb = tk.Checkbutton(scroll_frame, text=f"{nome} - {mat}", variable=var, bd=0, highlightthickness=0)
+                cb = tk.Checkbutton(scroll_frame, text=f"{nome} - {mat}", variable=var, bd=0, highlightthickness=0,
+                                    bg=bg, fg=fg)
                 cb.pack(anchor="w")
                 aluno_cbs.append(cb)
 
@@ -1540,21 +1563,29 @@ class App:
             win.destroy()
             messagebox.showinfo("Copiar Dados", "Copiado para a área de transferência")
 
-        tk.Button(win, text="COPIAR CSV", command=copiar, bd=0, highlightthickness=0).grid(row=2, column=0, columnspan=2, pady=12)
+        t = TEMAS[self.config["theme"]]
+        bg, fg, field, select = t["bg"], t["fg"], t["field"], t["select"]
+        select_btn = "#35383e"
+        tk.Button(win, text="COPIAR CSV", command=copiar, bd=0, highlightthickness=0,
+                  bg=select_btn, fg=fg).grid(row=2, column=0, columnspan=2, pady=12)
         win.bind("<Return>", lambda _: copiar())
 
     # ── Janelas auxiliares ────────────────────
 
     def _visualizar_db(self):
+        t = TEMAS[self.config["theme"]]
+        bg, fg, field, select = t["bg"], t["fg"], t["field"], t["select"]
         win = tk.Toplevel(self.root)
         win.title("Banco de Dados")
         win.geometry("720x500")
+        win.configure(bg=bg)
 
-        top_bar = tk.Frame(win)
+        top_bar = tk.Frame(win, bg=bg)
         top_bar.pack(fill="x", padx=6, pady=(6, 2))
-        tk.Label(top_bar, text="🔍").pack(side="left")
+        tk.Label(top_bar, text="🔍", bg=bg, fg=fg).pack(side="left")
         var_busca = tk.StringVar()
-        tk.Entry(top_bar, textvariable=var_busca, width=30, bd=0, highlightthickness=0).pack(side="left", padx=4)
+        tk.Entry(top_bar, textvariable=var_busca, width=30, bd=0, highlightthickness=0,
+                 bg=field, fg=fg).pack(side="left", padx=4)
 
         nb = ttk.Notebook(win)
         nb.pack(fill="both", expand=True, padx=6, pady=4)
@@ -1564,12 +1595,19 @@ class App:
         todos: dict[str, list[tuple]]  = {}
 
         for mes in buscar_meses():
-            frame = tk.Frame(nb)
+            frame = tk.Frame(nb, bg=bg)
             nb.add(frame, text=mes)
             tree = ttk.Treeview(frame, columns=cols, show="headings")
             for col in cols:
                 tree.heading(col, text=col)
             tree.pack(fill="both", expand=True)
+            style_db = ttk.Style()
+            style_db.theme_use("default")
+            style_db.configure("Treeview", background=field, foreground=fg,
+                               fieldbackground=field, borderwidth=0, highlightthickness=0)
+            style_db.map("Treeview", background=[("selected", select)])
+            style_db.configure("Treeview.Heading", background=field, foreground=fg,
+                               borderwidth=0, highlightthickness=0)
             trees[mes] = tree
 
             dados     = buscar_registros_por_mes(mes)
@@ -1597,10 +1635,15 @@ class App:
         nb.bind("<<NotebookTabChanged>>", lambda _: filtrar())
 
     def _abrir_bolsistas(self):
+        t = TEMAS[self.config["theme"]]
+        bg, fg, field, select = t["bg"], t["fg"], t["field"], t["select"]
+        select_btn = "#35383e"
         win = tk.Toplevel(self.root)
         win.title("Bolsistas")
+        win.configure(bg=bg)
 
-        lista = tk.Listbox(win)
+        lista = tk.Listbox(win, bg=field, fg=fg,
+                          highlightthickness=0, bd=0)
         lista.pack(fill="both", expand=True)
         for b in buscar_bolsistas():
             lista.insert(tk.END, b)
@@ -1621,26 +1664,38 @@ class App:
                 self.combo_bolsista["values"] = buscar_bolsistas()
                 self._focus_matricula()
 
-        tk.Button(win, text="Adicionar", command=adicionar, bd=0, highlightthickness=0).pack()
-        tk.Button(win, text="Remover",   command=remover, bd=0, highlightthickness=0).pack()
+        tk.Button(win, text="Adicionar", command=adicionar, bd=0, highlightthickness=0,
+                  bg=select_btn, fg=fg).pack()
+        tk.Button(win, text="Remover",   command=remover, bd=0, highlightthickness=0,
+                  bg=select_btn, fg=fg).pack()
 
     def _abrir_alunos(self):
+        t = TEMAS[self.config["theme"]]
+        bg, fg, field = t["bg"], t["fg"], t["field"]
+        select_btn = "#35383e"
         win = tk.Toplevel(self.root)
         win.title("Alunos e Servidores")
         win.geometry("540x420")
+        win.configure(bg=bg)
 
         # Search frame
-        search_frame = tk.Frame(win)
+        search_frame = tk.Frame(win, bg=bg)
         search_frame.pack(fill="x", padx=5, pady=(5, 0))
-        tk.Label(search_frame, text="Filtrar (nome ou matrícula):").pack(side="left")
+        tk.Label(search_frame, text="Filtrar (nome ou matrícula):", bg=bg, fg=fg).pack(side="left")
         filtro_var = tk.StringVar()
         filtro_var.trace("w", lambda *_: recarregar())
-        filtro_entry = tk.Entry(search_frame, textvariable=filtro_var, bd=0, highlightthickness=0)
+        filtro_entry = tk.Entry(search_frame, textvariable=filtro_var, bd=0, highlightthickness=0,
+                                bg=field, fg=fg)
         filtro_entry.pack(side="left", fill="x", expand=True, padx=(5, 0))
         filtro_entry.focus()
 
         cols = ("Matrícula / ID", "Nome", "Tipo")
         tree = ttk.Treeview(win, columns=cols, show="headings", selectmode="browse")
+        style_alunos = ttk.Style()
+        style_alunos.theme_use("default")
+        style_alunos.configure("Treeview", background=field, foreground=fg,
+                               fieldbackground=field, borderwidth=0, highlightthickness=0)
+        style_alunos.map("Treeview", background=[("selected", select_btn)])
         for col in cols:
             tree.heading(col, text=col)
         tree.column("Matrícula / ID", width=160)
@@ -1680,7 +1735,7 @@ class App:
                 recarregar()
                 self._focus_matricula()
 
-        btn_frame = tk.Frame(win)
+        btn_frame = tk.Frame(win, bg=bg)
         btn_frame.pack(pady=(0, 8))
         tk.Button(btn_frame, text="Editar nome", command=editar, bd=0, highlightthickness=0).pack(side="left", padx=5)
         tk.Button(btn_frame, text="Remover",     command=remover, bd=0, highlightthickness=0).pack(side="left", padx=5)
@@ -1815,16 +1870,21 @@ class App:
             self._rebuild_abas()
             self._atualizar_lista()
 
-        tk.Button(win, text="Salvar", command=salvar, bd=0, highlightthickness=0).grid(
-            row=len(defs), column=0, columnspan=2, pady=10)
+        t = TEMAS[self.config["theme"]]
+        select_btn = "#35383e"  # Slightly darker than select
+        tk.Button(win, text="Salvar", command=salvar, bd=0, highlightthickness=0,
+                  bg=select_btn, fg=t["fg"]).grid(row=len(defs), column=0, columnspan=2, pady=10)
         win.bind("<Return>", lambda _: salvar())
 
     def _pedir_input(self, titulo: str, mensagem: str) -> str | None:
+        t = TEMAS[self.config["theme"]]
+        bg, fg, field = t["bg"], t["fg"], t["field"]
         win = tk.Toplevel(self.root)
         win.title(titulo)
-        tk.Label(win, text=mensagem).pack(padx=10, pady=(10, 0))
+        win.configure(bg=bg)
+        tk.Label(win, text=mensagem, bg=bg, fg=fg).pack(padx=10, pady=(10, 0))
 
-        entry = tk.Entry(win, bd=0, highlightthickness=0)
+        entry = tk.Entry(win, bd=0, highlightthickness=0, bg=field, fg=fg)
         entry.pack(padx=10, pady=5)
         entry.focus()
 
@@ -1835,7 +1895,10 @@ class App:
             win.destroy()
 
         entry.bind("<Return>", lambda _: confirmar())
-        tk.Button(win, text="OK", command=confirmar, bd=0, highlightthickness=0).pack(pady=(0, 10))
+        t = TEMAS[self.config["theme"]]
+        select_btn = "#35383e"
+        tk.Button(win, text="OK", command=confirmar, bd=0, highlightthickness=0,
+                  bg=select_btn, fg=fg).pack(pady=(0, 10))
         win.wait_window()
         return resultado["valor"]
 
