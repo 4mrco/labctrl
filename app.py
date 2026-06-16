@@ -244,7 +244,7 @@ def restaurar_registro_db(campos: dict) -> None:
 def buscar_registros_por_mes(mes: str) -> list[tuple]:
     with get_conn() as conn:
         return conn.execute(
-            """SELECT id,nome,matricula,data,entrada,saida,maquina,status
+            """SELECT id,nome,matricula,data,entrada,saida,maquina,bolsista,status
                FROM registros WHERE data LIKE ? ORDER BY id DESC""",
             (f"%/{mes}",),
         ).fetchall()
@@ -557,28 +557,8 @@ class App:
         self.btn_entrada.pack(side="left", padx=(12, 0))
 
         # ── MENU POPUP ──────────────────────────
-        self.btn_menu = tk.Button(self.header, text="⋮", width=1, relief="flat", bd=0, highlightthickness=0, font=(None, -20))
+        self.btn_menu = tk.Button(self.header, text="⋮", width=1, relief="flat", bd=0, highlightthickness=0, font=(None, -20), command=self._abrir_menu)
         self.btn_menu.pack(side="right", padx=8)
-        self.btn_menu.bind("<ButtonRelease-1>", lambda e: self.menu.tk_popup(e.x_root, e.y_root))
-
-        self.menu = tk.Menu(self.root, tearoff=0)
-        self.menu.add_command(label="Editar selecionado", command=self._editar_registro)
-        self.menu.add_command(label="Remover selecionado", command=self._remover_registro)
-        self.menu.add_separator()
-
-        export_menu = tk.Menu(self.menu, tearoff=0)
-        export_menu.add_command(label="Dia", command=self._exportar_dia)
-        export_menu.add_command(label="Ontem", command=self._exportar_ontem)
-        export_menu.add_command(label="Semana", command=self._exportar_semana)
-        export_menu.add_command(label="Mês", command=self._exportar_mes)
-        self.menu.add_cascade(label="Exportar", menu=export_menu)
-
-        self.menu.add_command(label="Visualizar DB", command=self._visualizar_db)
-        self.menu.add_separator()
-        self.menu.add_command(label="Bolsistas", command=self._abrir_bolsistas)
-        self.menu.add_command(label="Alunos / Servidores", command=self._abrir_alunos)
-        self.menu.add_separator()
-        self.menu.add_command(label="Alternar Tema", command=self._toggle_tema)
 
         # MAIN CONTENT - Tree frame
         self.tree_frame = tk.Frame(self.root)
@@ -729,10 +709,9 @@ class App:
         self.menu.add_separator()
         self.menu.add_command(label="Alternar Tema",       command=self._toggle_tema)
 
-        self.btn_menu.bind(
-            "<Button-1>",
-            lambda e: self.menu.tk_popup(e.x_root, e.y_root),
-        )
+    def _abrir_menu(self):
+        """Open the menu using the button's screen position."""
+        self.menu.tk_popup(self.btn_menu.winfo_rootx(), self.btn_menu.winfo_rooty() + 20)
 
     # ── Filtro ───────────────────────────────
 
@@ -1148,11 +1127,11 @@ class App:
         if filtro == "Hoje":
             registros = [r for r in registros if r[3] == hoje]
         elif filtro == "Ativos":
-            registros = [r for r in registros if r[7] == "ATIVO"]
+            registros = [r for r in registros if r[8] == "ATIVO"]
 
         # Populate with zebra striping
         for i, r in enumerate(registros):
-            rid, nome, matricula, data, entrada, saida, maquina, status = r
+            rid, nome, matricula, data, entrada, saida, maquina, bolsista, status = r
             tempo = calcular_tempo(entrada, saida, data) if saida else ""
 
             if not matricula:
@@ -1168,7 +1147,7 @@ class App:
             if status == "ATIVO":
                 tags = (str(rid), status)
             else:
-                tags = (str(rid), status, str(i % 2))
+                tags = (str(rid), "other", str(i % 2))
 
             self.tree.insert(
                 "", "end",
@@ -1610,13 +1589,21 @@ class App:
                                borderwidth=0, highlightthickness=0)
             trees[mes] = tree
 
-            dados     = buscar_registros_por_mes(mes)
-            todos[mes] = [
-                (r[1], r[2] if not r[2].startswith("SRV-") else "servidor",
-                 r[3], r[4], r[5] or "", r[6] or "-", "")
-                for r in dados
-            ]
-            for row in todos[mes]:
+            dados = buscar_registros_por_mes(mes)
+            todos[mes] = []
+            for r in dados:
+                _, nome, matricula, data, entrada, saida, maquina, bolsista, _ = r
+                # Handle matricula like main list does
+                if not matricula:
+                    mat_exib = ""
+                elif matricula == "SERVIDOR":
+                    mat_exib = "Servidor"
+                elif matricula.startswith("SRV-"):
+                    mat_exib = "servidor"
+                else:
+                    mat_exib = matricula
+                row = (nome, mat_exib, data, entrada, saida or "", maquina or "-", bolsista or "")
+                todos[mes].append(row)
                 tree.insert("", "end", values=row)
 
         def filtrar(*_):
