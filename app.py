@@ -501,6 +501,7 @@ class App:
         self.entry_matricula = tk.Entry(self.toolbar, width=16, bd=0, highlightthickness=0)
         self.entry_matricula.pack(side="left", padx=(0, 8))
         self.entry_matricula.bind("<Return>", self.registrar_entrada)
+        self.entry_matricula.bind("<KP_Enter>", self.registrar_entrada)
         self.entry_matricula.bind("<Tab>", self._focus_maquina)
         self.entry_matricula.bind("<KeyRelease>", self._validate_matricula)
         self.entry_matricula.focus()
@@ -529,6 +530,7 @@ class App:
         )
         self.combo_maquina.set("-")
         self.combo_maquina.bind("<Return>", self.registrar_entrada)
+        self.combo_maquina.bind("<KP_Enter>", self.registrar_entrada)
         self.combo_maquina.bind("<Tab>", self._focus_bolsista)
         self.combo_maquina.bind("<FocusIn>", self._on_maquina_focus_in)
         self.combo_maquina.bind("<KeyRelease>", self._validate_maquina)
@@ -546,6 +548,7 @@ class App:
             self.combo_bolsista.set(bolsistas[0])
         self.combo_bolsista.bind("<<ComboboxSelected>>", self._on_bolsista_change)
         self.combo_bolsista.bind("<Return>", self.registrar_entrada)
+        self.combo_bolsista.bind("<KP_Enter>", self.registrar_entrada)
         self.combo_bolsista.bind("<Tab>", self._focus_matricula_from_bolsista)
         self.combo_bolsista.bind("<FocusIn>", self._on_bolsista_focus_in)
         self.combo_bolsista.pack(side="left", padx=8)
@@ -732,17 +735,19 @@ class App:
         win.grab_set()
         win.configure(bg=bg)
 
-        tk.Label(win, text="Nome:").grid(row=0, column=0, sticky="w", padx=10, pady=(12, 4))
+        tk.Label(win, text="Nome:", bg=bg, fg=fg).grid(row=0, column=0, sticky="w", padx=10, pady=(12, 4))
         entry_nome = tk.Entry(win, width=28, bd=0, highlightthickness=0, bg=field, fg=fg)
         entry_nome.grid(row=0, column=1, padx=10, pady=(12, 4))
         entry_nome.focus()
 
-        tk.Label(win, text="Tipo:").grid(row=1, column=0, sticky="w", padx=10, pady=4)
+        tk.Label(win, text="Tipo:", bg=bg, fg=fg).grid(row=1, column=0, sticky="w", padx=10, pady=4)
         var_tipo = tk.StringVar(value="Aluno")
         frame_tipo = tk.Frame(win, bg=bg)
         frame_tipo.grid(row=1, column=1, sticky="w", padx=10, pady=4)
-        tk.Radiobutton(frame_tipo, text="Aluno",    variable=var_tipo, value="Aluno", bd=0, highlightthickness=0).pack(side="left")
-        tk.Radiobutton(frame_tipo, text="Servidor", variable=var_tipo, value="Servidor", bd=0, highlightthickness=0).pack(side="left")
+        tk.Radiobutton(frame_tipo, text="Aluno",    variable=var_tipo, value="Aluno", bd=0, highlightthickness=0,
+                       bg=bg, fg=fg).pack(side="left")
+        tk.Radiobutton(frame_tipo, text="Servidor", variable=var_tipo, value="Servidor", bd=0, highlightthickness=0,
+                       bg=bg, fg=fg).pack(side="left")
 
         resultado = {"valor": None}
 
@@ -755,8 +760,10 @@ class App:
 
         entry_nome.bind("<Return>", confirmar)
         win.bind("<Return>", confirmar)
-        tk.Button(win, text="Salvar", command=confirmar, bd=0, highlightthickness=0).grid(
-            row=2, column=0, columnspan=2, pady=(4, 12))
+        win.bind("<KP_Enter>", confirmar)
+        select_btn = "#35383e"
+        tk.Button(win, text="Salvar", command=confirmar, bd=0, highlightthickness=0,
+                  bg=select_btn, fg=fg).grid(row=2, column=0, columnspan=2, pady=(4, 12))
         win.wait_window()
         self._focus_matricula()
         return resultado["valor"]
@@ -1121,6 +1128,9 @@ class App:
         self.tree.tag_configure("FINALIZADO", background=t["bg"])
 
         registros = buscar_registros_por_mes(mes)
+
+        # Sort by entrada (column index 4): oldest first (empty last)
+        registros = sorted(registros, key=lambda r: r[4] if r[4] else "99:99")
 
         # Apply filters based on var_filtro
         filtro = self.var_filtro.get() if hasattr(self, 'var_filtro') else "Mês"
@@ -1542,12 +1552,11 @@ class App:
             win.destroy()
             messagebox.showinfo("Copiar Dados", "Copiado para a área de transferência")
 
-        t = TEMAS[self.config["theme"]]
-        bg, fg, field, select = t["bg"], t["fg"], t["field"], t["select"]
         select_btn = "#35383e"
         tk.Button(win, text="COPIAR CSV", command=copiar, bd=0, highlightthickness=0,
                   bg=select_btn, fg=fg).grid(row=2, column=0, columnspan=2, pady=12)
         win.bind("<Return>", lambda _: copiar())
+        win.bind("<KP_Enter>", lambda _: copiar())
 
     # ── Janelas auxiliares ────────────────────
 
@@ -1623,7 +1632,7 @@ class App:
 
     def _abrir_bolsistas(self):
         t = TEMAS[self.config["theme"]]
-        bg, fg, field, select = t["bg"], t["fg"], t["field"], t["select"]
+        bg, fg, field = t["bg"], t["fg"], t["field"]
         select_btn = "#35383e"
         win = tk.Toplevel(self.root)
         win.title("Bolsistas")
@@ -1724,8 +1733,10 @@ class App:
 
         btn_frame = tk.Frame(win, bg=bg)
         btn_frame.pack(pady=(0, 8))
-        tk.Button(btn_frame, text="Editar nome", command=editar, bd=0, highlightthickness=0).pack(side="left", padx=5)
-        tk.Button(btn_frame, text="Remover",     command=remover, bd=0, highlightthickness=0).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Editar nome", command=editar, bd=0, highlightthickness=0,
+                  bg=select_btn, fg=fg).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Remover",     command=remover, bd=0, highlightthickness=0,
+                  bg=select_btn, fg=fg).pack(side="left", padx=5)
 
     def _editar_registro(self):
         tree = self.tree
@@ -1742,9 +1753,12 @@ class App:
             return
         _, nome, _, data, entrada, saida, maquina, _, _ = reg
 
+        t = TEMAS[self.config["theme"]]
+        bg, fg, field = t["bg"], t["fg"], t["field"]
         win = tk.Toplevel(self.root)
         win.title(f"Editar — {nome}")
         win.resizable(False, False)
+        win.configure(bg=bg)
 
         campos = {}
         ordem_campos = []  # Track field order for keyboard navigation
@@ -1756,15 +1770,15 @@ class App:
             ("Máquina",             maquina or ""),
         ]
         for i, (label, valor) in enumerate(defs):
-            tk.Label(win, text=label).grid(row=i, column=0, sticky="w", padx=10, pady=4)
-            e = tk.Entry(win, width=20, bd=0, highlightthickness=0)
+            tk.Label(win, text=label, bg=bg, fg=fg).grid(row=i, column=0, sticky="w", padx=10, pady=4)
+            e = tk.Entry(win, width=20, bd=0, highlightthickness=0, bg=field, fg=fg)
             e.insert(0, valor)
             e.grid(row=i, column=1, padx=10, pady=4)
             campos[label] = e
             ordem_campos.append(e)
 
         def format_hora_on_save(valor):
-            """Format HHMM -> HH:MM only on save/focus-out."""
+            """Format hora on save/focus-out: accepts 1-4 digits or HH:MM."""
             if not valor:
                 return valor
             nums = "".join(c for c in valor if c.isdigit())
@@ -1772,12 +1786,20 @@ class App:
                 return f"{nums[:2]}:{nums[2:]}"
             elif len(nums) == 3:
                 return f"0{nums[:1]}:{nums[1:]}"
+            elif len(nums) == 2:
+                return f"{nums}:00"  # 99 -> 99:00
+            elif len(nums) == 1:
+                return f"0{nums}:00"  # 9 -> 09:00
             return valor
 
         def format_maquina_on_save(valor):
             """Pad single digit machine number only on save/focus-out."""
-            if valor and valor not in ("-", "ML") and len(valor) == 1 and valor.isdigit():
-                return valor.zfill(2)
+            if not valor:
+                return valor
+            # Extract only digits
+            nums = "".join(c for c in valor if c.isdigit())
+            if len(nums) == 1:
+                return nums.zfill(2)
             return valor
 
         def focus_proximo(event):
@@ -1792,39 +1814,90 @@ class App:
             ordem_campos[anterior].focus()
             return "break"
 
-        # Bind keyboard navigation
+        selection_on_focus = {}
+
+        def on_focus_in(event):
+            """Select all on focus for hora fields, remember for backspace."""
+            widget = event.widget
+            if label := next((l for l, c in campos.items() if c == widget), None):
+                if label in ("Entrada (HH:MM)", "Saída (HH:MM)"):
+                    widget.select_from(0)
+                    widget.select_to(tk.END)
+                    selection_on_focus[widget] = True
+
+        def on_click_move(event):
+            """User clicked/moved - next backspace should delete char, not all."""
+            widget = event.widget
+            if label := next((l for l, c in campos.items() if c == widget), None):
+                if label in ("Entrada (HH:MM)", "Saída (HH:MM)"):
+                    selection_on_focus.pop(widget, None)
+
+        def clear_hora_on_backspace(event):
+            """Clear hour field: if selection exists (from focus), clear all; else normal delete."""
+            widget = event.widget
+            if label := next((l for l, c in campos.items() if c == widget), None):
+                if label in ("Entrada (HH:MM)", "Saída (HH:MM)"):
+                    if selection_on_focus.get(widget):
+                        # Selection from focus - clear all
+                        widget.delete(0, tk.END)
+                        selection_on_focus.pop(widget)
+                        return "break"
+                    # Normal backspace behavior
+
         for campo in ordem_campos:
             campo.bind("<Tab>", focus_proximo)
             campo.bind("<Shift-Tab>", focus_anterior)
             campo.bind("<Down>", focus_proximo)
             campo.bind("<Up>", focus_anterior)
+            if campo in (campos.get("Entrada (HH:MM)"), campos.get("Saída (HH:MM)")):
+                campo.bind("<FocusIn>", on_focus_in)
+                campo.bind("<Button-1>", on_click_move)
+                campo.bind("<ButtonRelease-1>", on_click_move)
+                campo.bind("<KeyRelease>", on_click_move)
+                campo.bind("<BackSpace>", clear_hora_on_backspace)
 
         def format_fields_on_focus_out(event):
             """Format hora and maquina fields when they lose focus."""
             widget = event.widget
-            label = None
-            for l, c in campos.items():
-                if c == widget:
-                    label = l
-                    break
-            if label == "Entrada (HH:MM)" or label == "Saída (HH:MM)":
-                valor = format_hora_on_save(widget.get().strip())
-                widget.delete(0, tk.END)
-                widget.insert(0, valor)
-            elif label == "Máquina":
-                valor = format_maquina_on_save(widget.get().strip())
-                widget.delete(0, tk.END)
-                widget.insert(0, valor)
+            valor = widget.get().strip()
+            if not valor:
+                return
+            # Use after to ensure the widget has lost focus
+            def aplicar_formatacao():
+                if not widget.winfo_ismapped():
+                    return
+                if widget == campos["Entrada (HH:MM)"]:
+                    widget.delete(0, tk.END)
+                    widget.insert(0, format_hora_on_save(valor))
+                elif widget == campos["Saída (HH:MM)"]:
+                    widget.delete(0, tk.END)
+                    widget.insert(0, format_hora_on_save(valor))
+                elif widget == campos["Máquina"]:
+                    widget.delete(0, tk.END)
+                    widget.insert(0, format_maquina_on_save(valor))
+            win.after(10, aplicar_formatacao)
 
         # Bind focus-out formatting
         for label in ["Entrada (HH:MM)", "Saída (HH:MM)", "Máquina"]:
             campos[label].bind("<FocusOut>", format_fields_on_focus_out)
 
         def salvar():
+            # Get values and apply formatting
             nova_data    = campos["Data (DD/MM/AAAA)"].get().strip()
             nova_entrada = format_hora_on_save(campos["Entrada (HH:MM)"].get().strip())
-            nova_saida   = format_hora_on_save(campos["Saída (HH:MM)"].get().strip())
+            nova_saida   = format_hora_on_save(campos["Saída (HH:MM)"].get().strip()) if campos["Saída (HH:MM)"].get().strip() else ""
             nova_maquina = format_maquina_on_save(campos["Máquina"].get().strip())
+
+            # Update fields with formatted values
+            campos["Entrada (HH:MM)"].delete(0, tk.END)
+            campos["Entrada (HH:MM)"].insert(0, nova_entrada)
+            if nova_saida:
+                campos["Saída (HH:MM)"].delete(0, tk.END)
+                campos["Saída (HH:MM)"].insert(0, nova_saida)
+            if nova_maquina:
+                campos["Máquina"].delete(0, tk.END)
+                campos["Máquina"].insert(0, nova_maquina)
+
             try:
                 datetime.strptime(nova_data, "%d/%m/%Y")
                 dt_entrada = datetime.strptime(nova_entrada, "%H:%M")
@@ -1857,11 +1930,11 @@ class App:
             self._rebuild_abas()
             self._atualizar_lista()
 
-        t = TEMAS[self.config["theme"]]
         select_btn = "#35383e"  # Slightly darker than select
         tk.Button(win, text="Salvar", command=salvar, bd=0, highlightthickness=0,
                   bg=select_btn, fg=t["fg"]).grid(row=len(defs), column=0, columnspan=2, pady=10)
         win.bind("<Return>", lambda _: salvar())
+        win.bind("<KP_Enter>", lambda _: salvar())
 
     def _pedir_input(self, titulo: str, mensagem: str) -> str | None:
         t = TEMAS[self.config["theme"]]
@@ -1882,7 +1955,6 @@ class App:
             win.destroy()
 
         entry.bind("<Return>", lambda _: confirmar())
-        t = TEMAS[self.config["theme"]]
         select_btn = "#35383e"
         tk.Button(win, text="OK", command=confirmar, bd=0, highlightthickness=0,
                   bg=select_btn, fg=fg).pack(pady=(0, 10))
