@@ -433,7 +433,7 @@ def calcular_estatisticas(dados: list[tuple]) -> dict:
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Controle de Laboratório")
+        self.root.title("")
         self.root.minsize(820, 400)
         self.config = load_config()
 
@@ -473,21 +473,46 @@ class App:
         self.sep_header = tk.Frame(self.root, height=1)
         self.sep_header.pack(fill="x", side="top")
 
-        # Dashboard stats in header
-        self.lbl_dashboard = tk.Label(self.header, text="")
-        self.lbl_dashboard.pack(side="left", padx=16)
-
-        # Filter buttons
-        self.var_filtro = tk.StringVar(value="Mês")
+        # Filter buttons with integrated counters
+        self.var_filtro = tk.StringVar(value="Hoje")
         self._btns_filtro = {}
-        for opcao in ("Hoje", "Ativos", "Mês"):
-            b = tk.Button(
-                self.header, text=opcao, width=7,
-                command=lambda o=opcao: self._set_filtro(o),
-                bd=0, highlightthickness=0,
+        self._filter_frame = tk.Frame(self.header)
+        self._filter_frame.pack(side="left", padx=2)
+
+        
+        def make_filter_button(text, width=10, command=None):
+            return tk.Button(
+                self._filter_frame, text=text, width=width,
+                command=command, bd=0, highlightthickness=0, pady=1,
             )
-            b.pack(side="left", padx=2)
-            self._btns_filtro[opcao] = b
+
+        self._btns_filtro["Hoje"] = make_filter_button(
+            "Hoje", 14, command=lambda: self._set_filtro("Hoje")
+        )
+        self._btns_filtro["Hoje"].pack(side="left", padx=2)
+
+        self._btns_filtro["Ativos"] = make_filter_button(
+            "Ativos", 14, command=lambda: self._set_filtro("Ativos")
+        )
+        self._btns_filtro["Ativos"].pack(side="left", padx=2)
+
+        # Month selector: split button with month on left, dropdown arrow on right
+        self._month_btn = tk.Button(
+            self.header, text="", width=12, anchor="center",
+            bd=0, highlightthickness=0, pady=1
+        )
+        self._month_btn.pack(side="left", padx=2)
+
+        # Dropdown arrow button - compact, same style as month button
+        self._month_dropdown_btn = tk.Button(
+            self.header, text="▾", width=1,
+            bd=0, highlightthickness=0, pady=1
+        )
+        self._month_dropdown_btn.pack(side="left", padx=(0, 2))
+
+        # Create month menu
+        self._month_menu = tk.Menu(self.header, tearoff=0, bd=0,)
+        self._month_dropdown_btn.config(command=lambda: self._show_month_menu())
 
         self.lbl_clock = tk.Label(self.header, text="")
         self.lbl_clock.pack(side="right", padx=12)
@@ -511,17 +536,6 @@ class App:
         self.entry_matricula.configure(textvariable=self._ph_matricula, fg="#B5BAC1")
         self.entry_matricula.bind("<FocusIn>", lambda e: self._on_entry_focus(e))
         self.entry_matricula.bind("<FocusOut>", lambda e: self._on_entry_focus_out(e))
-
-        # Month selector - separate row below toolbar
-        self.frame_mes = tk.Frame(self.root)
-        self.frame_mes.pack(fill="x", padx=12, pady=(0, 4))
-        self.lbl_mes = tk.Label(self.frame_mes, text="Mês:", anchor="w")
-        self.lbl_mes.pack(side="left", padx=(0, 4))
-        self.combo_mes = ttk.Combobox(
-            self.frame_mes, values=[], width=14, state="readonly"
-        )
-        self.combo_mes.pack(side="left", padx=(0, 8))
-        self.combo_mes.bind("<<ComboboxSelected>>", self._on_mes_change)
 
         # Máquina combobox
         self.combo_maquina = ttk.Combobox(
@@ -720,8 +734,21 @@ class App:
 
     def _set_filtro(self, opcao: str):
         self.var_filtro.set(opcao)
+        # Reset month to current when selecting Hoje or Ativos filters
+        if opcao in ("Hoje", "Ativos"):
+            self._reset_month_to_current()
         self._aplicar_tema()  # Re-color filter buttons
         self._atualizar_lista()
+
+    def _reset_month_to_current(self):
+        """Reset month button and key to current month."""
+        hoje = agora().strftime("%d/%m/%Y")
+        mes_atual = hoje[3:]
+        for f in self._meses_formatados():
+            if self._parse_mes_combo(f) == mes_atual:
+                self._month_btn.config(text=f)
+                self._current_month_key = f
+                break
 
     # ── Popup entrada sem matrícula ──────────
 
@@ -802,34 +829,66 @@ class App:
     # ── Abas (simplified) ───────────────────
 
     def _rebuild_abas(self):
-        """Populate month combobox and initialize sort state."""
-        self.combo_mes["values"] = self._meses_formatados()
-        # Select current month if available
+        """Initialize month button and populate menu, then clear sort state."""
+        meses = self._meses_formatados()
+        self._populate_month_menu(meses)
+
+        # Select current month if available, update button text
         hoje = agora().strftime("%d/%m/%Y")
         mes_atual = hoje[3:]
-        formatted = self._meses_formatados()
-        for f in formatted:
+        for f in meses:
             if self._parse_mes_combo(f) == mes_atual:
-                self.combo_mes.set(f)
+                self._month_btn.config(text=f)
+                self._current_month_key = f
                 break
-        if not self.combo_mes.get() and formatted:
-            self.combo_mes.set(formatted[0])
+        if not hasattr(self, '_current_month_key') and meses:
+            self._month_btn.config(text=meses[0])
+            self._current_month_key = meses[0]
 
         self._sort_state.clear()
         self._atualizar_lista()
+        self._month_btn.config(command=self._set_month_to_current)
 
     def _mes_ativo(self) -> str:
         """Return the currently selected month in DD/MM/YYYY format (using current day)."""
-        mes_combo = self.combo_mes.get()
-        if not mes_combo:
-            return agora().strftime("%m/%Y")
-        return self._parse_mes_combo(mes_combo)
+        if hasattr(self, '_current_month_key') and self._current_month_key:
+            return self._parse_mes_combo(self._current_month_key)
+        return agora().strftime("%m/%Y")
+
+    def _populate_month_menu(self, meses):
+        """Populate the month selection menu."""
+        self._month_menu.delete(0, tk.END)
+        for m in meses:
+            self._month_menu.add_command(label=m, command=lambda sel=m: self._select_month(sel))
+
+    def _show_month_menu(self):
+        """Display the month selection menu."""
+        self._month_menu.tk_popup(self._month_dropdown_btn.winfo_rootx(),
+                                   self._month_dropdown_btn.winfo_rooty() + 20)
+
+    def _select_month(self, month_name):
+        """Handle month selection from menu."""
+        self._month_btn.config(text=month_name)
+        self._current_month_key = month_name
+        self.var_filtro.set("Mês")  # Ensure month filter is active
+        self._atualizar_lista()
+
+    def _set_month_to_current(self):
+        """Set month selector to current month and refresh."""
+        hoje = agora().strftime("%d/%m/%Y")
+        mes_atual = hoje[3:]
+        for f in self._meses_formatados():
+            if self._parse_mes_combo(f) == mes_atual:
+                self._month_btn.config(text=f)
+                self._current_month_key = f
+                break
+        self.var_filtro.set("Mês")  # Ensure month filter is active
+        self._atualizar_lista()
 
     # ── Ordenação por coluna ─────────────────
 
     def _ordenar(self, col: str, evento=None):
-        mes = self.combo_mes.get()
-        if not mes:
+        if not hasattr(self, '_current_month_key') or not self._current_month_key:
             return
         reverse = False
         estado = self._sort_state.get("current")
@@ -849,11 +908,7 @@ class App:
             self.tree.heading(c, text=c + arrow,
                             command=lambda cc=c: self._ordenar(cc))
 
-    def _on_mes_change(self, event=None):
-        self._sort_state.clear()
-        self._atualizar_lista()
-
-    # ── Eventos ──────────────────────────────
+    # ── Ordenação por coluna ─────────────────
 
     def _on_select(self, event=None):
         sel = self.tree.selection()
@@ -1115,11 +1170,11 @@ class App:
         t = TEMAS[self.config["theme"]]
         hoje = agora().strftime("%d/%m/%Y")
 
-        # Parse selected month
-        mes_combo = self.combo_mes.get()
-        if not mes_combo:
+        # Get selected month from the current_month_key
+        if hasattr(self, '_current_month_key') and self._current_month_key:
+            mes = self._parse_mes_combo(self._current_month_key)
+        else:
             return
-        mes = self._parse_mes_combo(mes_combo)
 
         # Clear and configure tree
         self.tree.delete(*self.tree.get_children())
@@ -1172,7 +1227,9 @@ class App:
         hoje   = agora().strftime("%d/%m/%Y")
         total  = contar_registros_hoje(hoje)
         ativos = contar_ativos()
-        self.lbl_dashboard.config(text=f"Hoje: {total} | Ativos: {ativos}")
+        # Update filter button counts
+        self._btns_filtro["Hoje"].config(text=f"Hoje ({total})")
+        self._btns_filtro["Ativos"].config(text=f"Ativos ({ativos})")
 
     def _tick_relogio(self):
         self.lbl_clock.config(text=agora().strftime("%H:%M"))
@@ -1202,18 +1259,17 @@ class App:
         self.toolbar.configure(bg=bg)
         self.tree_frame.configure(bg=bg)
         self.bottom_bar.configure(bg=bg)
-        if hasattr(self, 'frame_mes'):
-            self.frame_mes.configure(bg=bg)
 
         self.sep_header.configure(bg=field)
 
         self.lbl_title.configure(bg=bg, fg=fg)
-        self.lbl_dashboard.configure(bg=bg, fg=fg)
         self.lbl_clock.configure(bg=bg, fg=fg)
-        self.lbl_mes.configure(bg=bg, fg=fg)
         self.lbl_selecionados.configure(bg=bg, fg=fg)
         self.lbl_registros.configure(bg=bg, fg=fg)
         self.lbl_status.configure(bg=bg, fg=fg)
+
+        # Filter frame background
+        self._filter_frame.configure(bg=bg)
 
         # Toolbar buttons
         self.btn_entrada.configure(bg=field, fg=fg, activebackground=select, disabledforeground="#888888",
@@ -1232,6 +1288,25 @@ class App:
                 relief="sunken" if ativo else "raised",
                 bd=0, highlightthickness=0,
             )
+
+        # Style month button (like filter buttons but always enabled)
+        self._month_btn.configure(
+            bg=field, fg=fg, activebackground=select,
+            relief="raised", bd=0, highlightthickness=0
+        )
+
+        # Style dropdown arrow button - same as month button for unified look
+        self._month_dropdown_btn.configure(
+            bg=field, fg=fg, activebackground=select,
+            relief="raised", bd=0, highlightthickness=0
+        )
+
+        # Apply dark theme to month menu
+        self._month_menu.config(
+            bg=field, fg=fg,
+            activebackground=select, activeforeground=fg,
+            tearoff=0,
+        )
 
         if not self.entry_matricula.get() or self.entry_matricula.get() == "Matrícula":
             self.entry_matricula.configure(bg=field, fg="#B5BAC1", insertbackground=fg, disabledbackground=field,
@@ -1466,7 +1541,7 @@ class App:
 
     def _abrir_copiar_personalizado(self):
         t = TEMAS[self.config["theme"]]
-        bg, fg, field, select = t["bg"], t["fg"], t["field"], t["select"]
+        bg, fg = t["bg"], t["fg"]
         win = tk.Toplevel(self.root)
         win.title("Copiar dados para planilha")
         win.resizable(False, False)

@@ -6,3 +6,4 @@ venv/
 .env
 exports/
 .openclaude-profile.json
+profile.txt
