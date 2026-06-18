@@ -1549,11 +1549,19 @@ class App:
 
     def _abrir_copiar_personalizado(self):
         t = TEMAS[self.config["theme"]]
-        bg, fg = t["bg"], t["fg"]
+        bg, fg, field, select = t["bg"], t["fg"], t["field"], t["select"]
         win = tk.Toplevel(self.root)
         win.title("Copiar dados para planilha")
         win.resizable(False, False)
         win.geometry("600x500")
+
+        # Global mousewheel handler for this window only
+        def on_mousewheel_global(e):
+            if e.num == 4:
+                canvas.yview_scroll(-1, "units")
+            elif e.num == 5:
+                canvas.yview_scroll(1, "units")
+            return "break"
         win.grab_set()
         win.configure(bg=bg)
 
@@ -1588,7 +1596,10 @@ class App:
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-        bind_mousewheel(canvas)
+
+        # Mousewheel scrolling - bind at window level for reliable capture
+        win.bind("<Button-4>", on_mousewheel_global)
+        win.bind("<Button-5>", on_mousewheel_global)
 
         var_todos = tk.IntVar()
         var_alunos = {}
@@ -1606,10 +1617,11 @@ class App:
                 if mat in var_alunos:
                     var_alunos[mat].set(val)
 
-        # Big separator and top "Todos"
+        # Big separator and top "TODOS"
         tk.Frame(scroll_frame, height=1, bg="#444").pack(fill="x", pady=(0, 8))
-        tk.Checkbutton(scroll_frame, text="Todos", variable=var_todos, command=toggle_todos, bd=0, highlightthickness=0,
-                       bg=bg, fg=fg).pack(anchor="w")
+        tk.Checkbutton(scroll_frame, text="TODOS", variable=var_todos, command=toggle_todos, bd=0, highlightthickness=0,
+                       bg=bg, fg=fg, selectcolor=select, activebackground=select,
+                       activeforeground=fg, relief="flat").pack(anchor="center")
 
         def atualizar_alunos():
             for cb in aluno_cbs:
@@ -1648,20 +1660,35 @@ class App:
                     # "Todos esta dia" checkbox
                     var_dia = tk.IntVar()
                     var_por_data[data] = []
-                    cb_dia = tk.Checkbutton(scroll_frame, text="todos (dia)", variable=var_dia, bd=0, highlightthickness=0,
-                                            bg=bg, fg=fg, command=lambda d=data, v=var_dia: toggle_dia(d, v))
-                    cb_dia.pack(anchor="w")
+                    cb_dia = tk.Checkbutton(scroll_frame, text="TODOS (DIA)", variable=var_dia, bd=0, highlightthickness=0,
+                                            bg=bg, fg=fg, selectcolor=select, activebackground=select,
+                                            activeforeground=fg, relief="flat", command=lambda d=data, v=var_dia: toggle_dia(d, v))
+                    cb_dia.pack(anchor="center")
+                    # Separator below "todos (dia)"
+                    tk.Frame(scroll_frame, height=1, bg="#333").pack(fill="x", pady=(4, 2))
                     ultima_data = data
 
                 var = tk.IntVar()
                 var_alunos[mat] = var
                 var_por_data[data].append(mat)
-                # Normalize spacing: use fixed-width fields with | separator
-                entrada_fmt = f"{entrada or ' '} |  {saida or ' '} | "
-                cb = tk.Checkbutton(scroll_frame, text=f"{entrada_fmt}{nome} | {mat}", variable=var, bd=0, highlightthickness=0,
-                                    bg=bg, fg=fg)
-                cb.pack(anchor="w")
-                aluno_cbs.append(cb)
+                # Create a frame with fixed-width columns and | delimiters
+                row_frame = tk.Frame(scroll_frame, bg=bg)
+                row_frame.pack(anchor="w")
+                tk.Label(row_frame, text="|", width=1, bg=bg, fg=fg).pack(side="left")
+                cb_widget = tk.Checkbutton(row_frame, text="", variable=var, bd=0, highlightthickness=0,
+                                           bg=bg, fg=fg, selectcolor=select, activebackground=select,
+                                           activeforeground=fg, relief="flat")
+                cb_widget.pack(side="left")
+                tk.Label(row_frame, text="|", width=1, bg=bg, fg=fg).pack(side="left")
+                tk.Label(row_frame, text=f"{entrada or ' '}", width=8, anchor="center", bg=bg, fg=fg).pack(side="left")
+                tk.Label(row_frame, text="|", bg=bg, fg=fg).pack(side="left")
+                tk.Label(row_frame, text=f"{saida or ' '}", width=8, anchor="center", bg=bg, fg=fg).pack(side="left")
+                tk.Label(row_frame, text="|", bg=bg, fg=fg).pack(side="left")
+                tk.Label(row_frame, text=nome, width=25, anchor="w", bg=bg, fg=fg).pack(side="left")
+                tk.Label(row_frame, text="|", bg=bg, fg=fg).pack(side="left")
+                tk.Label(row_frame, text=mat, width=12, anchor="center", bg=bg, fg=fg).pack(side="left")
+                tk.Label(row_frame, text="|", width=1, bg=bg, fg=fg).pack(side="left")
+                aluno_cbs.append(row_frame)
 
         periodo_cb.bind("<<ComboboxSelected>>", lambda _: (atualizar_alunos(), var_todos.set(0)))
         atualizar_alunos()
