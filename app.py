@@ -806,7 +806,7 @@ class App:
 
         self._status_job = self.root.after(
             4000,
-            lambda: self.lbl_status.config(text="Pronto")
+            lambda: self.lbl_status.config(text="")
         )
     # ── Mês formatting ─────────────────────────
 
@@ -1330,6 +1330,14 @@ class App:
             background=[("readonly", field)],
             foreground=[("readonly", fg)])
 
+        # Apply dark theme to Combobox dropdown via Tk option database
+        # The dropdown Listbox is created internally by Tk and must be styled
+        # via option_add since ttk.Style doesn't affect it
+        self.root.option_add("*TCombobox*Listbox.Background", field)
+        self.root.option_add("*TCombobox*Listbox.Foreground", fg)
+        self.root.option_add("*TCombobox*Listbox.SelectBackground", select)
+        self.root.option_add("*TCombobox*Listbox.SelectForeground", fg)
+
         style.configure("Treeview",
             background=bg, foreground=fg, fieldbackground=field,
             borderwidth=0, highlightthickness=0)
@@ -1545,6 +1553,7 @@ class App:
         win = tk.Toplevel(self.root)
         win.title("Copiar dados para planilha")
         win.resizable(False, False)
+        win.geometry("600x500")
         win.grab_set()
         win.configure(bg=bg)
 
@@ -1553,24 +1562,52 @@ class App:
         periodo_cb.grid(row=0, column=0, columnspan=2, padx=10, pady=(12, 4))
 
         frame_alunos = tk.Frame(win, bg=bg)
-        frame_alunos.grid(row=1, column=0, columnspan=2, padx=10, pady=4)
-        canvas = tk.Canvas(frame_alunos, width=280, height=200)
+        frame_alunos.grid(row=1, column=0, columnspan=2, padx=10, pady=4, sticky="nsew")
+        win.grid_columnconfigure(1, weight=1)
+        win.grid_rowconfigure(1, weight=1)
+
+        canvas = tk.Canvas(frame_alunos, bg=bg, highlightthickness=0)
         scrollbar = ttk.Scrollbar(frame_alunos, orient="vertical", command=canvas.yview)
-        scroll_frame = tk.Frame(canvas)
+        scroll_frame = tk.Frame(canvas, bg=bg)
+
+        # Enable mousewheel scrolling (works on Linux via Button-4/Button-5)
+        def on_mousewheel(event):
+            if event.num == 4:  # Mouse wheel up
+                canvas.yview_scroll(-1, "units")
+            elif event.num == 5:  # Mouse wheel down
+                canvas.yview_scroll(1, "units")
+
+        def bind_mousewheel(widget):
+            widget.bind("<Button-4>", on_mousewheel)
+            widget.bind("<Button-5>", on_mousewheel)
+            for child in widget.winfo_children():
+                bind_mousewheel(child)
+
         scroll_frame.bind("<Configure>", lambda _: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
+        bind_mousewheel(canvas)
 
         var_todos = tk.IntVar()
         var_alunos = {}
         aluno_cbs = []
+        var_por_data = {}  # Track IntVars per data
 
         def toggle_todos():
+            val = var_todos.get()
             for var in var_alunos.values():
-                var.set(var_todos.get())
+                var.set(val)
 
+        def toggle_dia(data, var_dia):
+            val = var_dia.get()
+            for mat in var_por_data.get(data, []):
+                if mat in var_alunos:
+                    var_alunos[mat].set(val)
+
+        # Big separator and top "Todos"
+        tk.Frame(scroll_frame, height=1, bg="#444").pack(fill="x", pady=(0, 8))
         tk.Checkbutton(scroll_frame, text="Todos", variable=var_todos, command=toggle_todos, bd=0, highlightthickness=0,
                        bg=bg, fg=fg).pack(anchor="w")
 
@@ -1582,18 +1619,46 @@ class App:
 
             periodo = var_periodo.get()
             with get_conn() as conn:
-                # Período está no formato MM/YYYY, data no formato DD/MM/YYYY
+                # Período está no formato MM/YYYY
                 mes_ano = periodo.split("/")
-                # data[4:6] = MM, data[7:11] = YYYY
+                # Query includes data, entrada, saida, nome, matricula (newest first)
                 registros = conn.execute(
-                    "SELECT DISTINCT matricula, nome FROM registros WHERE substr(data, 4, 2) = ? AND substr(data, 7, 4) = ? ORDER BY nome",
+                    "SELECT data, entrada, saida, nome, matricula FROM registros WHERE substr(data, 4, 2) = ? AND substr(data, 7, 4) = ? ORDER BY data DESC, entrada DESC",
                     (mes_ano[0], mes_ano[1])
                 ).fetchall()
 
-            for mat, nome in registros:
+            # Group by data, with multiple registros per aluno
+            ultima_data = None
+            mats_por_data = {}
+            for data, entrada, saida, nome, mat in registros:
+                # Track matriculas per data
+                if data not in mats_por_data:
+                    mats_por_data[data] = []
+                mats_por_data[data].append(mat)
+
+                # Handle None values - replace with empty space
+                entrada = entrada or " "
+                saida = saida or " "
+
+                # Add date divider with "Todos esta dia" checkbox
+                if data != ultima_data:
+                    divider = tk.Label(scroll_frame, text=data, bg=bg, fg=fg, font=("Arial", 9, "bold"))
+                    divider.pack(anchor="w", pady=(8, 2))
+
+                    # "Todos esta dia" checkbox
+                    var_dia = tk.IntVar()
+                    var_por_data[data] = []
+                    cb_dia = tk.Checkbutton(scroll_frame, text="todos (dia)", variable=var_dia, bd=0, highlightthickness=0,
+                                            bg=bg, fg=fg, command=lambda d=data, v=var_dia: toggle_dia(d, v))
+                    cb_dia.pack(anchor="w")
+                    ultima_data = data
+
                 var = tk.IntVar()
                 var_alunos[mat] = var
-                cb = tk.Checkbutton(scroll_frame, text=f"{nome} - {mat}", variable=var, bd=0, highlightthickness=0,
+                var_por_data[data].append(mat)
+                # Normalize spacing: use fixed-width fields with | separator
+                entrada_fmt = f"{entrada or ' '} |  {saida or ' '} | "
+                cb = tk.Checkbutton(scroll_frame, text=f"{entrada_fmt}{nome} | {mat}", variable=var, bd=0, highlightthickness=0,
                                     bg=bg, fg=fg)
                 cb.pack(anchor="w")
                 aluno_cbs.append(cb)
