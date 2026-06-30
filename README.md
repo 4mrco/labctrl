@@ -38,13 +38,13 @@ O LabCTRL resolve esse problema na origem. Os alunos registram a própria entrad
 
 ## Estrutura
 
-
+```
 labctrl/
 ├── app.py              # Aplicação principal
 ├── lab.db              # Banco de dados SQLite
 ├── config.json         # Preferências do usuário
 └── lab.log             # Registro de erros
-
+```
 
 ## Status
 
