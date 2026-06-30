@@ -1,0 +1,151 @@
+[33mcommit e3f20cc12b0b3da02e3d4408e632a41ce325e05e[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m
+Author: Marco <lab@local>
+Date:   Tue Jun 30 14:58:00 2026 -0300
+
+    Remove arquivos de desenvolvimento
+
+ .claude/plans/labctrl-ui-redesign.md |   88 [31m--[m
+ appbkp.py                            | 1863 [31m----------------------------------[m
+ 2 files changed, 1951 deletions(-)
+
+[33mcommit 3515df1370d544f9d8da7d92a7d78e9e6cc58ec9[m
+Author: Marco <lab@local>
+Date:   Thu Jun 18 11:16:00 2026 -0300
+
+    ok
+
+ app.py | 55 [32m+++++++++++++++++++++++++++++++++++++++++[m[31m--------------[m
+ 1 file changed, 41 insertions(+), 14 deletions(-)
+
+[33mcommit cde2e9b1b070a9bf0364ee17da781c2fa56c0271[m
+Author: Marco <lab@local>
+Date:   Thu Jun 18 10:40:10 2026 -0300
+
+    v0.9.9.9
+
+ app.py | 85 [32m++++++++++++++++++++++++++++++++++++++++++++++++++++++++++[m[31m--------[m
+ 1 file changed, 75 insertions(+), 10 deletions(-)
+
+[33mcommit 1c4abb02d9764cc28791475170b3e30d460c1ba6[m
+Author: Marco <lab@local>
+Date:   Wed Jun 17 17:02:33 2026 -0300
+
+    v0.9.9
+
+ .gitignore  |   1 [32m+[m
+ app.py      | 183 [32m++++++++++++++++++++++++++++++++++++++++++[m[31m------------------[m
+ profile.txt |  11 [31m----[m
+ 3 files changed, 130 insertions(+), 65 deletions(-)
+
+[33mcommit 3e36b0e454613d3bcc20cf81eed84c0dc33ddb74[m
+Author: Marco <lab@local>
+Date:   Tue Jun 16 15:46:33 2026 -0300
+
+    last
+
+ app.py | 138 [32m+++++++++++++++++++++++++++++++++++++++++++++++++[m[31m----------------[m
+ 1 file changed, 105 insertions(+), 33 deletions(-)
+
+[33mcommit b6f9a0f9e18709717ff465ca0fa634aa1b45f716[m[33m ([m[1;33mtag: [m[1;33mv0.9[m[33m)[m
+Author: Marco <lab@local>
+Date:   Tue Jun 16 09:16:32 2026 -0300
+
+    v0.9
+
+ app.py | 59 [32m+++++++++++++++++++++++[m[31m------------------------------------[m
+ 1 file changed, 23 insertions(+), 36 deletions(-)
+
+[33mcommit 6b3b805f37ba73f0f4b301926af3e5bc80f94f06[m
+Author: Marco <lab@local>
+Date:   Tue Jun 9 15:27:06 2026 -0300
+
+    bug no menu
+
+ app.py | 111 [32m+++++++++++++++++++++++++++++++++++++++++++++++++++[m[31m--------------[m
+ 1 file changed, 87 insertions(+), 24 deletions(-)
+
+[33mcommit 43ae543fbf6fe5daa3ec1e3119a164050de3d9b3[m
+Author: Marco <lab@local>
+Date:   Tue Jun 9 15:07:40 2026 -0300
+
+    depois de corrigir as outlines
+
+ app.py | 70 [32m++++++++++++++++++++++++++++++++++++++[m[31m----------------------------[m
+ 1 file changed, 40 insertions(+), 30 deletions(-)
+
+[33mcommit 8b0ca4f3814f9989ddfda5d8a9be16ff6a5c2e05[m
+Author: Marco <lab@local>
+Date:   Tue Jun 9 14:42:42 2026 -0300
+
+    antes de corrigir as outlines'
+
+ app.py    |  171 [32m+++[m[31m-[m
+ appbkp.py | 2621 [32m+++++++++++++++++[m[31m--------------------------------------------[m
+ 2 files changed, 854 insertions(+), 1938 deletions(-)
+
+[33mcommit a1c470e43d5a03ddb0748fda752e93efd21ed935[m
+Author: Marco <lab@local>
+Date:   Tue Jun 2 17:13:49 2026 -0300
+
+    depois de reformular
+
+ .claude/plans/labctrl-ui-redesign.md |  88 [32m+++++[m
+ app.py                               | 636 [32m++++++++++++++++++++[m[31m---------------[m
+ config.json                          |   2 [32m+[m[31m-[m
+ 3 files changed, 446 insertions(+), 280 deletions(-)
+
+[33mcommit 19e0716e27836cde3223d9023b53eb0e618636ad[m
+Author: Marco <lab@local>
+Date:   Tue Jun 2 09:19:16 2026 -0300
+
+    antes da reformulacao
+
+ app.py      | 82 [32m++++++++++++++++++++++++++++++++++++++++++++++++[m[31m-------------[m
+ config.json |  2 [32m+[m[31m-[m
+ 2 files changed, 66 insertions(+), 18 deletions(-)
+
+[33mcommit 73bc23381289690ef19b3622a6816aff75c8ba5a[m
+Author: Marco <lab@local>
+Date:   Thu May 28 10:10:08 2026 -0300
+
+    ignore openclaude local profile
+
+ .gitignore               | 1 [32m+[m
+ .openclaude-profile.json | 9 [31m---------[m
+ 2 files changed, 1 insertion(+), 9 deletions(-)
+
+[33mcommit 835fe333403295db452ee0ef3a6ff7de2f1f87d5[m
+Author: Marco <lab@local>
+Date:   Thu May 28 10:06:45 2026 -0300
+
+    estavel antes da refatoração
+
+ .openclaude-profile.json |   2 [32m+[m[31m-[m
+ app.py                   | 121 [32m++++++++++++++++++++++++++++++++++++++++++++++[m[31m-[m
+ 2 files changed, 121 insertions(+), 2 deletions(-)
+
+[33mcommit d8dcb253ae100940ad8ab959d23b0d2b10b45105[m
+Author: Marco <lab@local>
+Date:   Thu May 21 08:29:52 2026 -0300
+
+    pequenas mudancas
+
+ .openclaude-profile.json |    9 [32m+[m
+ app.py                   |   75 [31m---[m
+ appbkp.py                | 1550 [32m++++++++++++++++++++++++++++++++++++++++++++++[m
+ config.json              |    2 [32m+[m[31m-[m
+ profile.txt              |   11 [32m+[m
+ 5 files changed, 1571 insertions(+), 76 deletions(-)
+
+[33mcommit 2f0d1a3a9e92c6460fb57b9ff19314e8be49156f[m
+Author: Marco <lab@local>
+Date:   Tue May 19 10:17:40 2026 -0300
+
+    Initial stable version
+
+ .gitignore         |    7 [32m+[m
+ app.py             | 1534 [32m++++++++++++++++++++++++++++++++++++++++++++++++++++[m
+ appbkp.py          | 1534 [32m++++++++++++++++++++++++++++++++++++++++++++++++++++[m
+ config.json        |    1 [32m+[m
+ importar_alunos.py |  136 [32m+++++[m
+ 5 files changed, 3212 insertions(+)

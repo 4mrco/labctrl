@@ -370,6 +370,28 @@ def mes_anterior() -> str:
     return f"{hoje.month - 1:02}/{hoje.year}"
 
 
+PORTUGUESE_CONNECTORS = {"da", "de", "do", "das", "dos", "e"}
+
+
+def normalizar_nome(nome: str) -> str:
+    """Normalize a name: capitalize first letter of each word, keep connectors lowercase."""
+    if not nome:
+        return nome
+    # Remove extra spaces and split
+    palavras = nome.strip().split()
+    if not palavras:
+        return nome
+    resultado = []
+    for i, palavra in enumerate(palavras):
+        palavra_lower = palavra.lower()
+        # First word always capitalized, or non-connectors
+        if i == 0 or palavra_lower not in PORTUGUESE_CONNECTORS:
+            resultado.append(palavra.capitalize())
+        else:
+            resultado.append(palavra_lower)
+    return " ".join(resultado)
+
+
 def datas_semana_atual() -> list[str]:
     hoje    = date.today()
     segunda = hoje - timedelta(days=hoje.weekday())
@@ -598,6 +620,9 @@ class App:
         self.tree.bind("<Double-1>", self._on_double_click)
         self.tree.bind("<BackSpace>", lambda e: self._saida_selecionado())
 
+        # Click on tree to clear selection if on empty area
+        self.tree.bind("<Button-1>", self._on_root_click)
+
         # BOTTOM STATUS BAR
         self.bottom_bar = tk.Frame(self.root, height=26)
         self.bottom_bar.pack(fill="x", side="bottom")
@@ -725,10 +750,51 @@ class App:
         self.menu.add_command(label="Alunos / Servidores", command=self._abrir_alunos)
         self.menu.add_separator()
         self.menu.add_command(label="Alternar Tema",       command=self._toggle_tema)
+        self.menu.add_separator()
+        self.menu.add_command(label="Sobre",               command=self._sobre)
 
     def _abrir_menu(self):
         """Open the menu using the button's screen position."""
         self.menu.tk_popup(self.btn_menu.winfo_rootx(), self.btn_menu.winfo_rooty() + 20)
+
+    def _sobre(self):
+        """Open the about dialog."""
+        t = TEMAS[self.config["theme"]]
+        bg, fg, field = t["bg"], t["fg"], t["field"]
+
+        win = tk.Toplevel(self.root)
+        win.title("Sobre")
+        win.resizable(False, False)
+        win.configure(bg=bg)
+        win.transient(self.root)
+        win.grab_set()
+
+        # Title
+        tk.Label(win, text="LabCTRL", font=(None, 14, "bold"),
+                 bg=bg, fg=fg).pack(pady=(15, 5))
+
+        # Subtitle
+        tk.Label(win, text="Sistema de Controle de Acesso de Laboratório",
+                 bg=bg, fg=fg).pack(pady=(0, 10))
+
+        # Content - Text widget for selectable text (styled like a label)
+        texto = (
+            "Desenvolvido por Marco Aurélio em 2026.1 durante a Bolsa de Iniciação Acadêmica, "
+            "com o objetivo de substituir o processo antigo de controle de acesso realizado em papel e transcrito manualmente para planilhas.\n\n"
+            "Este sistema encontra-se em desenvolvimento contínuo. Caso futuramente receba novas "
+            "funcionalidades, correções ou passe a ser mantido por outras pessoas, preservar estas informações e registrar os novos responsáveis pela manutenção.\n\n"
+            "Autor: Marco (@4mrco)\n"
+            "Contato: marco.aurelio@alu.ufc.br"
+        )
+        text_widget = tk.Text(win, wrap="word", bg=bg, fg=fg, relief="flat",
+                              highlightthickness=0, font=(None, 9), padx=5, pady=5, bd=0)
+        text_widget.pack(padx=15, pady=10)
+        text_widget.insert("1.0", texto)
+        text_widget.configure(state="disabled", cursor="")  # Disabled but selectable
+
+        # Close button
+        tk.Button(win, text="Fechar", width=10, command=win.destroy,
+                  bg="#35383e", fg=fg, bd=0, highlightthickness=0).pack(pady=(0, 15))
 
     # ── Filtro ───────────────────────────────
 
@@ -921,6 +987,15 @@ class App:
             self.btn_saida.configure(state="disabled")
             self.lbl_selecionados.config(text="Selecionados: 0")
 
+    def _on_root_click(self, event=None):
+        """Clear tree selection when clicking on empty area of tree."""
+        if not event:
+            return
+        # Coordinates are already relative to tree since we bound to tree
+        region = self.tree.identify(event.x, event.y)
+        if not region:  # Clicked on empty area, not on an item
+            self.tree.selection_remove(self.tree.selection())
+
     def _on_double_click(self, event=None):
         item = self.tree.identify_row(event.y)
         if item:
@@ -931,20 +1006,60 @@ class App:
         sel = self.tree.selection()
         if not sel:
             return
-        rid = int(self.tree.item(sel[0])["tags"][0])
-        self._registrar_saida_por_rid(rid)
+
+        # Get all selected records that are active
+        reg_items = []
+        for item in sel:
+            rid = int(self.tree.item(item)["tags"][0])
+            reg = buscar_registro_por_id(rid)
+            if reg and reg[8] == "ATIVO":  # Only active records
+                reg_items.append((rid, reg[1], item))
+
+        if not reg_items:
+            return
+
+        # Confirmation for multiple records
+        if len(reg_items) > 1:
+            if not messagebox.askyesno(
+                "Confirmar Saída",
+                f"Tem certeza que deseja registrar saída para {len(reg_items)} aluno(s)?"
+            ):
+                return
+
+        # Perform all operations
+        self._registrar_saida_batch(reg_items)
 
     def _registrar_saida_por_rid(self, rid: int):
+        """Register exit for a single record (helper for backward compatibility)."""
         reg = buscar_registro_por_id(rid)
         if not reg or reg[8] != "ATIVO":
             return
-        try:
-            finalizar_registro(rid, agora().strftime("%H:%M"))
-            self._push_undo({"tipo": "saida", "rid": rid, "nome": reg[1]})
-            self.status(f"Saída de {reg[1]} registrada.")
-        except Exception as e:
-            log.error("Falha ao registrar saída: %s", e)
+        self._registrar_saida_batch([(rid, reg[1], None)])
+
+    def _registrar_saida_batch(self, reg_items: list):
+        """Register exit for multiple records atomically."""
+        undo_entries = []
+        success = True
+
+        for rid, nome, item in reg_items:
+            try:
+                finalizar_registro(rid, agora().strftime("%H:%M"))
+                undo_entries.append({"tipo": "saida", "rid": rid, "nome": nome})
+            except Exception as e:
+                log.error("Falha ao registrar saída de %s: %s", nome, e)
+                success = False
+                break
+
+        if success:
+            # Atomically save all undo entries
+            for entry in undo_entries:
+                self._push_undo(entry)
+            self.status(f"Saída de {len(reg_items)} aluno(s) registrada(s).")
+        else:
+            # Rollback on error
             self.status("Erro ao registrar saída.", erro=True)
+
+        # Always refresh UI
         self._atualizar_lista()
         self._focus_matricula()
 
@@ -1094,6 +1209,7 @@ class App:
             nome = self._pedir_input("Novo aluno", "Nome completo:")
             if not nome:
                 return
+            nome = normalizar_nome(nome)
             try:
                 inserir_aluno(matricula, nome, tipo="aluno")
             except Exception as e:
@@ -1931,6 +2047,7 @@ class App:
         ordem_campos = []  # Track field order for keyboard navigation
 
         defs   = [
+            ("Nome",                  nome),
             ("Data (DD/MM/AAAA)",   data),
             ("Entrada (HH:MM)",     entrada),
             ("Saída (HH:MM)",       saida or ""),
@@ -2078,17 +2195,20 @@ class App:
                 messagebox.showerror("Formato inválido",
                     "Use DD/MM/AAAA para data e HH:MM para horários.", parent=win)
                 return
+            novo_nome = campos["Nome"].get().strip()
             try:
                 self._push_undo({
                     "tipo": "edicao",
                     "nome": nome,
                     "antes": {
                         "id": rid, "data": data, "entrada": entrada,
-                        "saida": saida, "maquina": maquina,
+                        "saida": saida, "maquina": maquina, "nome": nome,
                     },
                 })
                 atualizar_registro(rid, nova_data, nova_entrada, nova_saida, nova_maquina)
-                self.status(f"Registro de {nome} atualizado.")
+                if novo_nome != nome:
+                    atualizar_aluno(reg[2], novo_nome)  # reg[2] is matricula
+                self.status(f"Registro de {novo_nome} atualizado.")
             except Exception as e:
                 log.error("Falha ao atualizar: %s", e)
                 self.status("Erro ao salvar alterações.", erro=True)
