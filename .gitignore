@@ -2,10 +2,11 @@ __pycache__/
 *.pyc
 *.db
 *.log
+*.csv
 venv/
 .env
 exports/
 .openclaude-profile.json
 profile.txt
 .claude/
-appbkp.py
+apptst.py

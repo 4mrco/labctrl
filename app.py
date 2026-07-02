@@ -61,15 +61,41 @@ COL_NAMES = ("Nome", "Matrícula", "Entrada", "Saída", "Tempo", "Máquina")
 
 def load_config() -> dict:
     if not os.path.exists(CONFIG_FILE):
-        return {"theme": "light", "exported_months": [], "ultimo_bolsista": None}
+        return {"theme": "light", "exported_months": [], "ultimo_bolsista": None, "open_export_folder": True}
     cfg = json.load(open(CONFIG_FILE, "r"))
     cfg.setdefault("exported_months", [])
     cfg.setdefault("ultimo_bolsista", None)
+    cfg.setdefault("open_export_folder", True)
     return cfg
 
 
 def save_config(cfg: dict) -> None:
     json.dump(cfg, open(CONFIG_FILE, "w"))
+
+
+# ─────────────────────────────────────────────
+# EXPORT UTILITIES
+# ─────────────────────────────────────────────
+
+EXPORT_DIR = os.path.join(BASE_DIR, "exports")
+
+
+def get_export_dir() -> str:
+    """Get the base export directory, creating it if needed."""
+    os.makedirs(EXPORT_DIR, exist_ok=True)
+    return EXPORT_DIR
+
+
+def get_month_export_dir(mes: str | None = None) -> str:
+    """Get the export directory for a specific month (YYYY-MM format).
+
+    Creates the directory if it doesn't exist.
+    """
+    if mes is None:
+        mes = agora().strftime("%Y-%m")
+    month_dir = os.path.join(EXPORT_DIR, mes)
+    os.makedirs(month_dir, exist_ok=True)
+    return month_dir
 
 
 # ─────────────────────────────────────────────
@@ -449,6 +475,77 @@ def calcular_estatisticas(dados: list[tuple]) -> dict:
 
 
 # ─────────────────────────────────────────────
+# DIALOG UTILITIES
+# ─────────────────────────────────────────────
+
+def center_dialog(win: tk.Toplevel, parent: tk.Tk | tk.Toplevel):
+    """Center dialog window relative to its parent window."""
+    win.update_idletasks()
+    px, py = parent.winfo_rootx(), parent.winfo_rooty()
+    pw, ph = parent.winfo_width(), parent.winfo_height()
+    wx, wh = win.winfo_width(), win.winfo_height()
+    x = px + (pw - wx) // 2
+    y = py + (ph - wh) // 2
+    win.geometry(f"+{x}+{y}")
+
+
+def setup_dialog(win: tk.Toplevel, parent: tk.Tk | tk.Toplevel, min_width: int = 300, min_height: int = 120,
+                 resizable: tuple[bool, bool] = (True, True), escape_close: bool = True):
+    """Configure common dialog properties: position, grab, focus handling.
+
+    Args:
+        win: The Toplevel window to configure
+        parent: The parent window
+        min_width: Minimum width for the dialog
+        min_height: Minimum height for the dialog
+        resizable: Tuple of (width_resizable, height_resizable)
+        escape_close: Whether Escape key should close the dialog
+    """
+    win.transient(parent)
+    win.resizable(*resizable)
+    win.minsize(min_width, min_height)
+
+    # Escape key handling
+    if escape_close:
+        win.bind("<Escape>", lambda e: win.destroy())
+
+    # Center and grab after window is mapped (visible)
+    mapped = [False]  # Use list to allow modification in closure
+    def on_map(event=None):
+        if mapped[0]:
+            return
+        mapped[0] = True
+        center_dialog(win, parent)
+        try:
+            win.grab_set()
+        except tk.TclError:
+            pass  # Window already destroyed or grab failed
+
+    win.bind("<Map>", on_map, add='+')
+
+
+def focus_first_field(*fields):
+    """Set focus to the first editable field and select its content if applicable."""
+    if fields:
+        first = fields[0]
+        first.focus_set()
+        if isinstance(first, tk.Entry):
+            first.select_range(0, tk.END)
+
+
+def bind_enter_to_button(widget: tk.Widget, button: tk.Button):
+    """Bind Enter key in widget to trigger button click."""
+    widget.bind("<Return>", lambda e: button.invoke())
+    widget.bind("<KP_Enter>", lambda e: button.invoke())
+
+
+def center_messagebox(win: tk.Tk | tk.Toplevel):
+    """Reposition a messagebox to be centered over the parent window."""
+    # messagebox uses the parent's geometry, but we can still fix positioning
+    pass  # messagebox already centers over parent when parent is specified
+
+
+# ─────────────────────────────────────────────
 # APLICAÇÃO (UI)
 # ─────────────────────────────────────────────
 
@@ -764,10 +861,8 @@ class App:
 
         win = tk.Toplevel(self.root)
         win.title("Sobre")
-        win.resizable(False, False)
         win.configure(bg=bg)
-        win.transient(self.root)
-        win.grab_set()
+        setup_dialog(win, self.root, min_width=400, min_height=200, resizable=(False, False), escape_close=True)
 
         # Title
         tk.Label(win, text="LabCTRL", font=(None, 14, "bold"),
@@ -779,7 +874,7 @@ class App:
 
         # Content - Text widget for selectable text (styled like a label)
         texto = (
-            "Desenvolvido por Marco Aurélio em 2026.1 durante a Bolsa de Iniciação Acadêmica, "
+            "Desenvolvido por Marco Aurélio do curso de Engenharia de Computação em 2026.1 durante a Bolsa de Iniciação Acadêmica, "
             "com o objetivo de substituir o processo antigo de controle de acesso realizado em papel e transcrito manualmente para planilhas.\n\n"
             "Este sistema encontra-se em desenvolvimento contínuo. Caso futuramente receba novas "
             "funcionalidades, correções ou passe a ser mantido por outras pessoas, preservar estas informações e registrar os novos responsáveis pela manutenção.\n\n"
@@ -793,8 +888,10 @@ class App:
         text_widget.configure(state="disabled", cursor="")  # Disabled but selectable
 
         # Close button
-        tk.Button(win, text="Fechar", width=10, command=win.destroy,
-                  bg="#35383e", fg=fg, bd=0, highlightthickness=0).pack(pady=(0, 15))
+        close_btn = tk.Button(win, text="Fechar", width=10, command=win.destroy,
+                  bg="#35383e", fg=fg, bd=0, highlightthickness=0)
+        close_btn.pack(pady=(0, 15))
+        bind_enter_to_button(win, close_btn)
 
     # ── Filtro ───────────────────────────────
 
@@ -824,14 +921,12 @@ class App:
         bg, fg, field = t["bg"], t["fg"], t["field"]
         win = tk.Toplevel(self.root)
         win.title("Entrada sem matrícula")
-        win.resizable(False, False)
-        win.grab_set()
         win.configure(bg=bg)
+        setup_dialog(win, self.root, min_width=320, min_height=140)
 
         tk.Label(win, text="Nome:", bg=bg, fg=fg).grid(row=0, column=0, sticky="w", padx=10, pady=(12, 4))
         entry_nome = tk.Entry(win, width=28, bd=0, highlightthickness=0, bg=field, fg=fg)
         entry_nome.grid(row=0, column=1, padx=10, pady=(12, 4))
-        entry_nome.focus()
 
         tk.Label(win, text="Tipo:", bg=bg, fg=fg).grid(row=1, column=0, sticky="w", padx=10, pady=4)
         var_tipo = tk.StringVar(value="Aluno")
@@ -857,6 +952,7 @@ class App:
         select_btn = "#35383e"
         tk.Button(win, text="Salvar", command=confirmar, bd=0, highlightthickness=0,
                   bg=select_btn, fg=fg).grid(row=2, column=0, columnspan=2, pady=(4, 12))
+        focus_first_field(entry_nome)
         win.wait_window()
         self._focus_matricula()
         return resultado["valor"]
@@ -991,10 +1087,13 @@ class App:
         """Clear tree selection when clicking on empty area of tree."""
         if not event:
             return
-        # Coordinates are already relative to tree since we bound to tree
-        region = self.tree.identify(event.x, event.y)
-        if not region:  # Clicked on empty area, not on an item
-            self.tree.selection_remove(self.tree.selection())
+        try:
+            # identify() takes x, y as separate arguments
+            region = self.tree.identify("item", event.x, event.y)
+            if region == "nothing":  # Clicked on empty area
+                self.tree.selection_remove(self.tree.selection())
+        except (tk.TclError, TypeError):
+            pass  # Ignore errors during click handling
 
     def _on_double_click(self, event=None):
         item = self.tree.identify_row(event.y)
@@ -1022,7 +1121,8 @@ class App:
         if len(reg_items) > 1:
             if not messagebox.askyesno(
                 "Confirmar Saída",
-                f"Tem certeza que deseja registrar saída para {len(reg_items)} aluno(s)?"
+                f"Tem certeza que deseja registrar saída para {len(reg_items)} aluno(s)?",
+                parent=self.root
             ):
                 return
 
@@ -1155,6 +1255,7 @@ class App:
                 resp = messagebox.askyesno(
                     "Já dentro",
                     f"{nome} já tem entrada ativa.\nRegistrar saída agora?",
+                    parent=self.root
                 )
                 if resp:
                     finalizar_registro(rid_ativo, agora().strftime("%H:%M"))
@@ -1240,7 +1341,7 @@ class App:
         reg = buscar_registro_por_id(rid)
         if not reg:
             return
-        if messagebox.askyesno("Confirmar", "Remover registro?"):
+        if messagebox.askyesno("Confirmar", "Remover registro?", parent=self.root):
             try:
                 # Guarda snapshot antes de deletar
                 self._push_undo({
@@ -1498,6 +1599,7 @@ class App:
                 "Atenção",
                 f"Há {ativos} pessoa(s) ainda dentro do laboratório.\n"
                 "Deseja mesmo fechar o sistema?",
+                parent=self.root
             )
             if not resp:
                 return
@@ -1512,7 +1614,8 @@ class App:
         if not buscar_export_mes(mes_ant):
             return
         if messagebox.askyesno("Export pendente",
-                f"O mês {mes_ant} ainda não foi exportado.\n\nExportar agora?"):
+                f"O mês {mes_ant} ainda não foi exportado.\n\nExportar agora?",
+                parent=self.root):
             self._exportar_mes(mes_ant)
 
     def _verificar_orfaos(self):
@@ -1524,6 +1627,7 @@ class App:
             "Registros em aberto",
             f"Há {len(orfaos)} registro(s) de dias anteriores sem saída:\n\n"
             f"{nomes}\n\nFechar todos agora?",
+            parent=self.root
         )
         if resp:
             for r in orfaos:
@@ -1536,7 +1640,7 @@ class App:
     def _fazer_export(self, dados: list[tuple], label: str, titulo: str,
                       marcar_mes: str | None = None):
         if not dados:
-            messagebox.showinfo("Exportar", f"Nenhum registro para {titulo}.")
+            messagebox.showinfo("Exportar", f"Nenhum registro para {titulo}.", parent=self.root)
             return
 
         def _fmt_matricula(m):
@@ -1553,7 +1657,16 @@ class App:
 
         stats        = calcular_estatisticas(dados_norm)
         nome_arquivo = f"lab_{label}.csv"
-        caminho = os.path.join(BASE_DIR, nome_arquivo)
+
+        # Determine month for folder name from the first record's date
+        if dados:
+            primeira_data = dados[0][0]  # First record's date
+            mes_pasta = primeira_data.split("/")[1] + "-" + primeira_data.split("/")[0]  # MM-YYYY -> YYYY-MM
+        else:
+            mes_pasta = agora().strftime("%Y-%m")
+
+        month_dir = get_month_export_dir(mes_pasta)
+        caminho = os.path.join(month_dir, nome_arquivo)
         try:
             with open(caminho, "w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f)
@@ -1585,14 +1698,31 @@ class App:
             save_config(self.config)
 
         self.status(f"Exportado: {nome_arquivo}")
-        messagebox.showinfo("Exportado", f"Arquivo salvo: {nome_arquivo}")
+        export_folder = os.path.dirname(os.path.abspath(caminho))
 
-        # Abre a pasta onde o arquivo foi salvo
-        import subprocess
-        try:
-            subprocess.Popen(["xdg-open", os.path.dirname(os.path.abspath(caminho))])
-        except Exception:
-            pass
+        # Show success dialog with option to open folder
+        def abrir_pasta():
+            import subprocess
+            try:
+                subprocess.Popen(["xdg-open", export_folder])
+            except Exception:
+                pass
+
+        t = TEMAS[self.config["theme"]]
+        info_win = tk.Toplevel(self.root)
+        info_win.title("Exportado")
+        info_win.configure(bg=t["bg"])
+        setup_dialog(info_win, self.root, min_width=300, min_height=120, resizable=(False, False), escape_close=True)
+
+        tk.Label(info_win, text=f"Arquivo salvo:\n{nome_arquivo}", bg=t["bg"], fg=t["fg"],
+                 justify="center").pack(pady=10)
+
+        btn_frame = tk.Frame(info_win, bg=t["bg"])
+        btn_frame.pack(pady=10)
+        tk.Button(btn_frame, text="Abrir Pasta", command=abrir_pasta,
+                  bg="#35383e", fg=t["fg"], bd=0, highlightthickness=0).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="OK", command=info_win.destroy,
+                  bg="#35383e", fg=t["fg"], bd=0, highlightthickness=0).pack(side="left", padx=5)
 
     def _exportar_dia(self):
         dia = agora().strftime("%d/%m/%Y")
@@ -1661,25 +1791,15 @@ class App:
             texto = "\n".join(linhas)
             self.root.clipboard_clear()
             self.root.clipboard_append(texto)
-            messagebox.showinfo("Copiar Dados", "Copiado para a área de transferência")
+            messagebox.showinfo("Copiar Dados", "Copiado para a área de transferência", parent=self.root)
 
     def _abrir_copiar_personalizado(self):
         t = TEMAS[self.config["theme"]]
         bg, fg, field, select = t["bg"], t["fg"], t["field"], t["select"]
         win = tk.Toplevel(self.root)
         win.title("Copiar dados para planilha")
-        win.resizable(False, False)
-        win.geometry("600x500")
-
-        # Global mousewheel handler for this window only
-        def on_mousewheel_global(e):
-            if e.num == 4:
-                canvas.yview_scroll(-1, "units")
-            elif e.num == 5:
-                canvas.yview_scroll(1, "units")
-            return "break"
-        win.grab_set()
         win.configure(bg=bg)
+        setup_dialog(win, self.root, min_width=500, min_height=400, resizable=(False, False), escape_close=True)
 
         var_periodo = tk.StringVar(value=self._mes_ativo())
         periodo_cb = ttk.Combobox(win, textvariable=var_periodo, values=buscar_meses(), width=15, state="readonly")
@@ -1714,8 +1834,8 @@ class App:
         scrollbar.pack(side="right", fill="y")
 
         # Mousewheel scrolling - bind at window level for reliable capture
-        win.bind("<Button-4>", on_mousewheel_global)
-        win.bind("<Button-5>", on_mousewheel_global)
+        win.bind("<Button-4>", on_mousewheel)
+        win.bind("<Button-5>", on_mousewheel)
 
         var_todos = tk.IntVar()
         var_alunos = {}
@@ -1833,7 +1953,7 @@ class App:
             self.root.clipboard_clear()
             self.root.clipboard_append(csv)
             win.destroy()
-            messagebox.showinfo("Copiar Dados", "Copiado para a área de transferência")
+            messagebox.showinfo("Copiar Dados", "Copiado para a área de transferência", parent=self.root)
 
         select_btn = "#35383e"
         tk.Button(win, text="COPIAR CSV", command=copiar, bd=0, highlightthickness=0,
@@ -1848,8 +1968,8 @@ class App:
         bg, fg, field, select = t["bg"], t["fg"], t["field"], t["select"]
         win = tk.Toplevel(self.root)
         win.title("Banco de Dados")
-        win.geometry("720x500")
         win.configure(bg=bg)
+        setup_dialog(win, self.root, min_width=600, min_height=400, resizable=(True, True), escape_close=True)
 
         top_bar = tk.Frame(win, bg=bg)
         top_bar.pack(fill="x", padx=6, pady=(6, 2))
@@ -1920,6 +2040,7 @@ class App:
         win = tk.Toplevel(self.root)
         win.title("Bolsistas")
         win.configure(bg=bg)
+        setup_dialog(win, self.root, min_width=300, min_height=250, resizable=(True, True), escape_close=True)
 
         lista = tk.Listbox(win, bg=field, fg=fg,
                           highlightthickness=0, bd=0)
@@ -1954,8 +2075,8 @@ class App:
         select_btn = "#35383e"
         win = tk.Toplevel(self.root)
         win.title("Alunos e Servidores")
-        win.geometry("540x420")
         win.configure(bg=bg)
+        setup_dialog(win, self.root, min_width=500, min_height=350, resizable=(True, True), escape_close=True)
 
         # Search frame
         search_frame = tk.Frame(win, bg=bg)
@@ -2009,7 +2130,7 @@ class App:
             matricula, nome, _ = tree.item(sel)["values"]
             if messagebox.askyesno("Confirmar",
                     f"Remover {nome}?\n(registros associados não serão apagados)",
-                    parent=win):
+                    parent=self.root):
                 deletar_aluno(matricula)
                 recarregar()
                 self._focus_matricula()
@@ -2025,7 +2146,7 @@ class App:
         tree = self.tree
         sel  = tree.selection()
         if not sel:
-            messagebox.showinfo("Editar", "Selecione um registro primeiro.")
+            messagebox.showinfo("Editar", "Selecione um registro primeiro.", parent=self.root)
             return
         rid = int(tree.item(sel[0])["tags"][0])
         self._abrir_form_edicao(rid)
@@ -2040,8 +2161,8 @@ class App:
         bg, fg, field = t["bg"], t["fg"], t["field"]
         win = tk.Toplevel(self.root)
         win.title(f"Editar — {nome}")
-        win.resizable(False, False)
         win.configure(bg=bg)
+        setup_dialog(win, self.root, min_width=350, min_height=180, resizable=(False, False), escape_close=True)
 
         campos = {}
         ordem_campos = []  # Track field order for keyboard navigation
@@ -2189,11 +2310,11 @@ class App:
                     dt_saida = datetime.strptime(nova_saida, "%H:%M")
                     if dt_saida <= dt_entrada:
                         messagebox.showerror("Horário inválido",
-                            "A saída deve ser posterior à entrada.", parent=win)
+                            "A saída deve ser posterior à entrada.", parent=self.root)
                         return
             except ValueError:
                 messagebox.showerror("Formato inválido",
-                    "Use DD/MM/AAAA para data e HH:MM para horários.", parent=win)
+                    "Use DD/MM/AAAA para data e HH:MM para horários.", parent=self.root)
                 return
             novo_nome = campos["Nome"].get().strip()
             try:
@@ -2220,6 +2341,8 @@ class App:
         select_btn = "#35383e"  # Slightly darker than select
         tk.Button(win, text="Salvar", command=salvar, bd=0, highlightthickness=0,
                   bg=select_btn, fg=t["fg"]).grid(row=len(defs), column=0, columnspan=2, pady=10)
+        focus_first_field(campos["Nome"])
+        bind_enter_to_button(campos["Nome"], win.winfo_children()[-1])
         win.bind("<Return>", lambda _: salvar())
         win.bind("<KP_Enter>", lambda _: salvar())
 
@@ -2229,11 +2352,12 @@ class App:
         win = tk.Toplevel(self.root)
         win.title(titulo)
         win.configure(bg=bg)
+        setup_dialog(win, self.root, min_width=300, min_height=100, escape_close=True)
+
         tk.Label(win, text=mensagem, bg=bg, fg=fg).pack(padx=10, pady=(10, 0))
 
         entry = tk.Entry(win, bd=0, highlightthickness=0, bg=field, fg=fg)
         entry.pack(padx=10, pady=5)
-        entry.focus()
 
         resultado = {"valor": None}
 
@@ -2243,8 +2367,11 @@ class App:
 
         entry.bind("<Return>", lambda _: confirmar())
         select_btn = "#35383e"
-        tk.Button(win, text="OK", command=confirmar, bd=0, highlightthickness=0,
-                  bg=select_btn, fg=fg).pack(pady=(0, 10))
+        ok_btn = tk.Button(win, text="OK", command=confirmar, bd=0, highlightthickness=0,
+                  bg=select_btn, fg=fg)
+        ok_btn.pack(pady=(0, 10))
+        focus_first_field(entry)
+        bind_enter_to_button(entry, ok_btn)
         win.wait_window()
         return resultado["valor"]
 
