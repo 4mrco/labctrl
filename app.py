@@ -2083,7 +2083,7 @@ class App:
         search_frame.pack(fill="x", padx=5, pady=(5, 0))
         tk.Label(search_frame, text="Filtrar (nome ou matrícula):", bg=bg, fg=fg).pack(side="left")
         filtro_var = tk.StringVar()
-        filtro_var.trace("w", lambda *_: recarregar())
+        filtro_var.trace_add("write", lambda *_: recarregar())
         filtro_entry = tk.Entry(search_frame, textvariable=filtro_var, bd=0, highlightthickness=0,
                                 bg=field, fg=fg)
         filtro_entry.pack(side="left", fill="x", expand=True, padx=(5, 0))
