@@ -1,0 +1,140 @@
+import os
+import json
+from datetime import datetime, date, timedelta
+from collections import defaultdict
+
+from core.config import CONFIG_FILE, EXPORT_DIR
+
+
+def load_config() -> dict:
+    if not os.path.exists(CONFIG_FILE):
+        return {"theme": "light", "exported_months": [], "ultimo_bolsista": None, "open_export_folder": True}
+    cfg = json.load(open(CONFIG_FILE, "r"))
+    cfg.setdefault("exported_months", [])
+    cfg.setdefault("ultimo_bolsista", None)
+    cfg.setdefault("open_export_folder", True)
+    return cfg
+
+
+def save_config(cfg: dict) -> None:
+    json.dump(cfg, open(CONFIG_FILE, "w"))
+
+
+def get_export_dir() -> str:
+    """Get the base export directory, creating it if needed."""
+    os.makedirs(EXPORT_DIR, exist_ok=True)
+    return EXPORT_DIR
+
+
+def get_month_export_dir(mes: str | None = None) -> str:
+    """Get the export directory for a specific month (YYYY-MM format).
+
+    Creates the directory if it doesn't exist.
+    """
+    if mes is None:
+        mes = agora().strftime("%Y-%m")
+    month_dir = os.path.join(EXPORT_DIR, mes)
+    os.makedirs(month_dir, exist_ok=True)
+    return month_dir
+
+
+def agora() -> datetime:
+    return datetime.now()
+
+
+def calcular_tempo(entrada: str, saida: str, data: str) -> str:
+    fmt = "%d/%m/%Y %H:%M"
+    try:
+        delta = (
+            datetime.strptime(f"{data} {saida}", fmt)
+            - datetime.strptime(f"{data} {entrada}", fmt)
+        )
+        m = int(delta.total_seconds() // 60)
+        return f"{m // 60:02}:{m % 60:02}"
+    except Exception:
+        return ""
+
+
+def mes_anterior() -> str:
+    hoje = date.today()
+    if hoje.month == 1:
+        return f"12/{hoje.year - 1}"
+    return f"{hoje.month - 1:02}/{hoje.year}"
+
+
+PORTUGUESE_CONNECTORS = {"da", "de", "do", "das", "dos", "e"}
+
+
+def normalizar_nome(nome: str) -> str:
+    """Normalize a name: capitalize first letter of each word, keep connectors lowercase."""
+    if not nome:
+        return nome
+    # Remove extra spaces and split
+    palavras = nome.strip().split()
+    if not palavras:
+        return nome
+    resultado = []
+    for i, palavra in enumerate(palavras):
+        palavra_lower = palavra.lower()
+        # First word always capitalized, or non-connectors
+        if i == 0 or palavra_lower not in PORTUGUESE_CONNECTORS:
+            resultado.append(palavra.capitalize())
+        else:
+            resultado.append(palavra_lower)
+    return " ".join(resultado)
+
+
+def datas_semana_atual() -> list[str]:
+    hoje    = date.today()
+    segunda = hoje - timedelta(days=hoje.weekday())
+    return [(segunda + timedelta(days=i)).strftime("%d/%m/%Y") for i in range(7)]
+
+
+def gerar_id_servidor(nome: str) -> str:
+    slug = nome.strip().lower().replace(" ", "-")
+    return f"SRV-{slug}"
+
+
+def calcular_estatisticas(dados: list[tuple]) -> dict:
+    minutos_por_pessoa: dict[str, int] = defaultdict(int)
+    visitas_por_pessoa: dict[str, int] = defaultdict(int)
+    uso_maquinas:       dict[str, int] = defaultdict(int)
+    horas_entrada:      dict[int, int]  = defaultdict(int)
+
+    for data, entrada, saida, nome, matricula, maquina, _ in dados:
+        chave = f"{nome} ({matricula})"
+        visitas_por_pessoa[chave] += 1
+        if maquina and maquina not in ("-", ""):
+            uso_maquinas[maquina] += 1
+        if entrada:
+            try:
+                horas_entrada[int(entrada.split(":")[0])] += 1
+            except Exception:
+                pass
+        if saida and entrada and data:
+            try:
+                fmt = "%d/%m/%Y %H:%M"
+                delta = (
+                    datetime.strptime(f"{data} {saida}", fmt)
+                    - datetime.strptime(f"{data} {entrada}", fmt)
+                )
+                minutos_por_pessoa[chave] += int(delta.total_seconds() // 60)
+            except Exception:
+                pass
+
+    return {
+        "total_visitas":      sum(visitas_por_pessoa.values()),
+        "total_pessoas":      len(visitas_por_pessoa),
+        "visitas_por_pessoa": sorted(visitas_por_pessoa.items(), key=lambda x: -x[1]),
+        "horas_por_pessoa": {
+            k: f"{v // 60}h{v % 60:02}m"
+            for k, v in sorted(minutos_por_pessoa.items(), key=lambda x: -x[1])
+        },
+        "maquina_mais_usada": (
+            max(uso_maquinas, key=uso_maquinas.get) if uso_maquinas else "-"
+        ),
+        "horario_pico": (
+            f"{max(horas_entrada, key=horas_entrada.get):02}:00"
+            if horas_entrada else "-"
+        ),
+    }
