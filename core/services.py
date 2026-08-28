@@ -6,6 +6,15 @@ from collections import defaultdict
 from core.config import CONFIG_FILE, EXPORT_DIR
 
 
+# ─────────────────────────────────────────────
+# Importações de database ficam aqui para evitar
+# importação circular (database ← config, services ← database)
+# ─────────────────────────────────────────────
+def _get_db():
+    from core import database as db
+    return db
+
+
 def load_config() -> dict:
     if not os.path.exists(CONFIG_FILE):
         return {"theme": "light", "exported_months": [], "ultimo_bolsista": None, "open_export_folder": True}
@@ -138,3 +147,43 @@ def calcular_estatisticas(dados: list[tuple]) -> dict:
             if horas_entrada else "-"
         ),
     }
+
+
+# ─────────────────────────────────────────────
+# SERVIÇO: FLUXO DE ENTRADA
+# ─────────────────────────────────────────────
+
+def processar_entrada(matricula: str | None, nome: str, maquina: str, bolsista: str) -> dict:
+    """Executa o fluxo de negócio da entrada no laboratório.
+
+    Retorna um dict com 'status' indicando o resultado:
+      - {"status": "ja_ativo",           "rid_ativo": int, "nome": str}
+      - {"status": "entrada_registrada", "rid": int, "nome": str, "hora": str}
+
+    Não acessa self, não abre janelas Tkinter, não toca na pilha de undo.
+    Lança exceção em caso de falha de banco de dados.
+    """
+    db = _get_db()
+
+    # Se tem matrícula, verifica se já há uma sessão ativa
+    if matricula:
+        rid_ativo = db.buscar_registro_ativo(matricula)
+        if rid_ativo:
+            return {"status": "ja_ativo", "rid_ativo": rid_ativo, "nome": nome}
+
+    now = agora()
+    db.inserir_registro(
+        matricula, nome,
+        now.strftime("%d/%m/%Y"), now.strftime("%H:%M"),
+        maquina, bolsista,
+    )
+
+    # Descobre o id do registro recém-inserido
+    db_conn = db.get_conn
+    with db_conn() as conn:
+        rid = conn.execute(
+            "SELECT id FROM registros WHERE matricula IS ? AND nome=? ORDER BY id DESC LIMIT 1",
+            (matricula, nome),
+        ).fetchone()[0]
+
+    return {"status": "entrada_registrada", "rid": rid, "nome": nome, "hora": now.strftime("%H:%M")}
