@@ -85,6 +85,7 @@ from core.services import (
     datas_semana_atual,
     gerar_id_servidor,
     calcular_estatisticas,
+    processar_entrada,
 )
 # ─────────────────────────────────────────────
 # DIALOG UTILITIES
@@ -861,44 +862,35 @@ class App:
         self._focus_matricula()
 
     def _fluxo_entrada(self, matricula: str | None, nome: str) -> bool:
-        if matricula:
-            rid_ativo = buscar_registro_ativo(matricula)
-            if rid_ativo:
-                resp = messagebox.askyesno(
-                    "Já dentro",
-                    f"{nome} já tem entrada ativa.\nRegistrar saída agora?",
-                    parent=self.root
-                )
-                if resp:
-                    finalizar_registro(rid_ativo, agora().strftime("%H:%M"))
-                    self._push_undo({"tipo": "saida", "rid": rid_ativo, "nome": nome})
-                    self.status(f"Saída de {nome} registrada.")
-                    self._atualizar_lista()
-                return False
-
-        now = agora()
+        """UI glue: chama o serviço de entrada e reage ao resultado."""
         try:
-            inserir_registro(
+            resultado = processar_entrada(
                 matricula, nome,
-                now.strftime("%d/%m/%Y"), now.strftime("%H:%M"),
                 self.combo_maquina.get(), self.combo_bolsista.get(),
             )
         except Exception as e:
-            log.error("Falha ao inserir registro: %s", e)
+            log.error("Falha ao registrar entrada: %s", e)
             self.status("Erro ao registrar entrada.", erro=True)
             return False
 
-        # Descobre o id do registro recém-inserido
-        with get_conn() as conn:
-            rid = conn.execute(
-                "SELECT id FROM registros WHERE matricula IS ? AND nome=? ORDER BY id DESC LIMIT 1",
-                (matricula, nome),
-            ).fetchone()[0]
+        if resultado["status"] == "ja_ativo":
+            resp = messagebox.askyesno(
+                "Já dentro",
+                f"{nome} já tem entrada ativa.\nRegistrar saída agora?",
+                parent=self.root
+            )
+            if resp:
+                finalizar_registro(resultado["rid_ativo"], agora().strftime("%H:%M"))
+                self._push_undo({"tipo": "saida", "rid": resultado["rid_ativo"], "nome": nome})
+                self.status(f"Saída de {nome} registrada.")
+                self._atualizar_lista()
+            return False
 
-        self._push_undo({"tipo": "entrada", "rid": rid, "nome": nome})
-        self.status(f"Entrada de {nome} registrada às {now.strftime('%H:%M')}.")
+        # status == "entrada_registrada"
+        self._push_undo({"tipo": "entrada", "rid": resultado["rid"], "nome": nome})
+        self.status(f"Entrada de {nome} registrada às {resultado['hora']}.")
         return True
-    
+
     def registrar_entrada(self, event=None):
         matricula = self.entry_matricula.get().strip()
         # Handle placeholder text
