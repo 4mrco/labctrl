@@ -22,10 +22,8 @@ BOLSISTAS_INICIAIS = [
 ]
 
 TEMAS = {
-    "dark":  {"bg": "#1E1F22", "fg": "#FFFFFF", "field": "#313338", "select": "#404249",
-              "ativo_bg": "#2A3B5A", "row_a": "#2B2D31", "row_b": "#25272B"},
-    "light": {"bg": "#F5F5F5", "fg": "#000000", "field": "#FFFFFF", "select": "#E0E0E0",
-              "ativo_bg": "#D0E0F0", "row_a": "#FFFFFF", "row_b": "#F8F8F8"},
+    "default": {"bg": "#1E1F22", "fg": "#FFFFFF", "field": "#313338", "select": "#404249",
+                "ativo_bg": "#2A3B5A", "row_a": "#2B2D31", "row_b": "#25272B"},
 }
 
 COL_NAMES = ("Nome", "Matrícula", "Entrada", "Saída", "Tempo", "Máquina")
