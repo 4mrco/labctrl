@@ -93,7 +93,7 @@ from ui.dialogs import (
     mostrar_sobre, pedir_input, popup_sem_matricula,
     setup_dialog, focus_first_field, bind_enter_to_button,
     abrir_copiar_personalizado, visualizar_db, abrir_bolsistas,
-    abrir_alunos, abrir_form_edicao
+    abrir_alunos, abrir_form_edicao, copiar_periodo
 )
 # ─────────────────────────────────────────────
 # DIALOG UTILITIES
@@ -388,10 +388,10 @@ class App:
         
 
         copiar_menu = tk.Menu(self.menu, tearoff=0)
-        copiar_menu.add_command(label="Hoje",        command=lambda: self._copiar_periodo("Hoje"))
-        copiar_menu.add_command(label="Ontem",       command=lambda: self._copiar_periodo("Ontem"))
-        copiar_menu.add_command(label="Semana",      command=lambda: self._copiar_periodo("Semana"))
-        copiar_menu.add_command(label="Mês",         command=lambda: self._copiar_periodo("Mês"))
+        copiar_menu.add_command(label="Hoje",        command=lambda: copiar_periodo(self.root, "Hoje", self._mes_ativo()))
+        copiar_menu.add_command(label="Ontem",       command=lambda: copiar_periodo(self.root, "Ontem", self._mes_ativo()))
+        copiar_menu.add_command(label="Semana",      command=lambda: copiar_periodo(self.root, "Semana", self._mes_ativo()))
+        copiar_menu.add_command(label="Mês",         command=lambda: copiar_periodo(self.root, "Mês", self._mes_ativo()))
         copiar_menu.add_command(label="Personalizado", command=lambda: abrir_copiar_personalizado(self.root, self._mes_ativo()))
         self.menu.add_cascade(label="Copiar Dados", menu=copiar_menu)
         self.menu.add_separator()
@@ -576,11 +576,21 @@ class App:
         except (tk.TclError, TypeError):
             pass  # Ignore errors during click handling
 
+    def _abrir_form_edicao_wrapper(self, rid: int):
+        def on_success(undo_payload, status_msg, erro=False):
+            if undo_payload:
+                self._push_undo(undo_payload)
+            self.status(status_msg, erro=erro)
+            if not erro:
+                self._rebuild_abas()
+                self._atualizar_lista()
+        abrir_form_edicao(self.root, rid, on_success)
+
     def _on_double_click(self, event=None):
         item = self.tree.identify_row(event.y)
         if item:
             rid = int(self.tree.item(item)["tags"][0])
-            abrir_form_edicao(self.root, rid, self._atualizar_lista)
+            self._abrir_form_edicao_wrapper(rid)
 
     def _saida_selecionado(self):
         sel = self.tree.selection()
@@ -1218,7 +1228,7 @@ class App:
             messagebox.showinfo("Editar", "Selecione um registro primeiro.", parent=self.root)
             return
         rid = int(tree.item(sel[0])["tags"][0])
-        abrir_form_edicao(self.root, rid, self._atualizar_lista)
+        self._abrir_form_edicao_wrapper(rid)
 
 # ─────────────────────────────────────────────
 # ENTRY POINT
