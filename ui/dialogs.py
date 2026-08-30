@@ -175,13 +175,18 @@ def popup_sem_matricula(parent: tk.Tk | tk.Toplevel) -> tuple[str, str] | None:
 
 
 from tkinter import ttk, messagebox
+import logging
+from datetime import datetime
 from core.database import (
     buscar_registro_por_id, atualizar_registro, buscar_meses,
     buscar_registros_por_mes, buscar_bolsistas, inserir_bolsista,
     deletar_bolsista, buscar_todos_alunos, atualizar_aluno, deletar_aluno,
-    get_conn, buscar_export_mes
+    get_conn, buscar_export_mes, buscar_export_dia, buscar_export_ontem,
+    buscar_export_semana
 )
 from core.services import agora, datas_semana_atual
+
+log = logging.getLogger(__name__)
 
 def gerar_csv(dados: list[tuple]) -> str:
     """Gera CSV com cabeçalho e dados na ordem exigida."""
@@ -191,7 +196,7 @@ def gerar_csv(dados: list[tuple]) -> str:
         linhas.append(f"{data},{entrada},{saida or ''},{nome},{mat_fmt},{maquina or ''},{bolsista or ''}")
     return "\n".join(linhas)
 
-def _copiar_periodo(self, periodo: str):
+def copiar_periodo(parent, periodo: str, mes_ativo: str):
     if periodo == "Hoje":
         dados = buscar_export_dia(agora().strftime("%d/%m/%Y"))
     elif periodo == "Ontem":
@@ -199,7 +204,7 @@ def _copiar_periodo(self, periodo: str):
     elif periodo == "Semana":
         dados = buscar_export_semana(datas_semana_atual())
     elif periodo == "Mês":
-        dados = buscar_export_mes(self._mes_ativo())
+        dados = buscar_export_mes(mes_ativo)
     else:
         return
     if dados:
@@ -209,9 +214,9 @@ def _copiar_periodo(self, periodo: str):
             mat_fmt = "" if not matricula or matricula == "SERVIDOR" else matricula
             linhas.append(f"{data}\t{entrada}\t{saida or ''}\t{nome}\t{mat_fmt}\t{maquina or ''}\t{bolsista or ''}")
         texto = "\n".join(linhas)
-        self.root.clipboard_clear()
-        self.root.clipboard_append(texto)
-        messagebox.showinfo("Copiar Dados", "Copiado para a área de transferência", parent=self.root)
+        parent.clipboard_clear()
+        parent.clipboard_append(texto)
+        messagebox.showinfo("Copiar Dados", "Copiado para a área de transferência", parent=parent)
 
 
 def abrir_copiar_personalizado(parent, mes_ativo: str):
@@ -736,25 +741,24 @@ def abrir_form_edicao(parent, rid: int, on_success_callback=None):
             return
         novo_nome = campos["Nome"].get().strip()
         try:
-            self._push_undo({
+            undo_payload = {
                 "tipo": "edicao",
                 "nome": nome,
                 "antes": {
                     "id": rid, "data": data, "entrada": entrada,
                     "saida": saida, "maquina": maquina, "nome": nome,
                 },
-            })
+            }
             atualizar_registro(rid, nova_data, nova_entrada, nova_saida, nova_maquina)
             if novo_nome != nome:
                 atualizar_aluno(reg[2], novo_nome)  # reg[2] is matricula
-            self.status(f"Registro de {novo_nome} atualizado.")
+            status_msg = f"Registro de {novo_nome} atualizado."
         except Exception as e:
             log.error("Falha ao atualizar: %s", e)
-            self.status("Erro ao salvar alterações.", erro=True)
+            if on_success_callback: on_success_callback(None, "Erro ao salvar alterações.", True)
             return
         win.destroy()
-        self._rebuild_abas()
-        if on_success_callback: on_success_callback()
+        if on_success_callback: on_success_callback(undo_payload, status_msg, False)
 
     select_btn = "#35383e"  # Slightly darker than select
     tk.Button(win, text="Salvar", command=salvar, bd=0, highlightthickness=0,
