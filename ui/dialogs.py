@@ -420,12 +420,30 @@ def visualizar_db(parent):
             tree.heading(col, text=col)
         tree.pack(fill="both", expand=True)
         style_db = ttk.Style()
-        style_db.theme_use("default")
+        style_db.theme_use("clam")
         style_db.configure("Treeview", background=field, foreground=fg,
-                           fieldbackground=field, borderwidth=0, highlightthickness=0)
-        style_db.map("Treeview", background=[("selected", select)])
-        style_db.configure("Treeview.Heading", background=field, foreground=fg,
-                           borderwidth=0, highlightthickness=0)
+                           fieldbackground=field, bordercolor=bg,
+                           lightcolor=bg, darkcolor=bg,
+                           borderwidth=0, relief="flat", highlightthickness=0)
+        style_db.map("Treeview",
+                    background=[("selected", select)],
+                    foreground=[("selected", fg)])
+        style_db.configure("Treeview.Heading", background=bg, foreground=fg,
+                           bordercolor=bg, lightcolor=bg, darkcolor=bg,
+                           borderwidth=0, highlightthickness=0, relief="flat")
+        style_db.map("Treeview.Heading", background=[("active", bg)])
+        style_db.configure("Vertical.TScrollbar",
+                           background=field, troughcolor=bg, arrowcolor=fg,
+                           bordercolor=bg, lightcolor=bg, darkcolor=bg,
+                           borderwidth=0, relief="flat", highlightthickness=0)
+        style_db.configure("TNotebook",
+                           background=bg, bordercolor=bg, lightcolor=bg, darkcolor=bg)
+        style_db.configure("TNotebook.Tab",
+                           background=field, foreground=fg,
+                           bordercolor=bg, lightcolor=bg, darkcolor=bg, padding=[8, 4])
+        style_db.map("TNotebook.Tab",
+                    background=[("selected", select)],
+                    foreground=[("selected", fg)])
         trees[mes] = tree
 
         dados = buscar_registros_por_mes(mes)
@@ -523,10 +541,22 @@ def abrir_alunos(parent, on_success_callback=None):
     cols = ("Matrícula / ID", "Nome", "Tipo")
     tree = ttk.Treeview(win, columns=cols, show="headings", selectmode="browse")
     style_alunos = ttk.Style()
-    style_alunos.theme_use("default")
+    style_alunos.theme_use("clam")
     style_alunos.configure("Treeview", background=field, foreground=fg,
-                           fieldbackground=field, borderwidth=0, highlightthickness=0)
-    style_alunos.map("Treeview", background=[("selected", select_btn)])
+                           fieldbackground=field, bordercolor=bg,
+                           lightcolor=bg, darkcolor=bg,
+                           borderwidth=0, relief="flat", highlightthickness=0)
+    style_alunos.map("Treeview",
+                    background=[("selected", select_btn)],
+                    foreground=[("selected", fg)])
+    style_alunos.configure("Treeview.Heading", background=bg, foreground=fg,
+                           bordercolor=bg, lightcolor=bg, darkcolor=bg,
+                           borderwidth=0, highlightthickness=0, relief="flat")
+    style_alunos.map("Treeview.Heading", background=[("active", bg)])
+    style_alunos.configure("Vertical.TScrollbar",
+                           background=field, troughcolor=bg, arrowcolor=fg,
+                           bordercolor=bg, lightcolor=bg, darkcolor=bg,
+                           borderwidth=0, relief="flat", highlightthickness=0)
     for col in cols:
         tree.heading(col, text=col)
     tree.column("Matrícula / ID", width=160)
