@@ -86,6 +86,8 @@ from core.services import (
     gerar_id_servidor,
     calcular_estatisticas,
     processar_entrada,
+    reverter_acao,
+    remover_registro as servico_remover_registro,
 )
 # ─────────────────────────────────────────────
 # DIALOG UTILITIES
@@ -174,8 +176,6 @@ class App:
         self._status_job = None
         # pilha de undo: lista de dicts {tipo, ...dados para reverter}
         self._undo_stack: list[dict] = []
-        # tema escuro ativo
-        self._tema_escuro: bool = True
 
         self._build_ui()
         self._build_menu()
@@ -459,8 +459,6 @@ class App:
         self.menu.add_command(label="Bolsistas",           command=self._abrir_bolsistas)
         self.menu.add_command(label="Alunos / Servidores", command=self._abrir_alunos)
         self.menu.add_separator()
-        self.menu.add_command(label="Alternar Tema",       command=self._toggle_tema)
-        self.menu.add_separator()
         self.menu.add_command(label="Sobre",               command=self._sobre)
 
     def _abrir_menu(self):
@@ -469,7 +467,7 @@ class App:
 
     def _sobre(self):
         """Open the about dialog."""
-        t = TEMAS[self.config["theme"]]
+        t = TEMAS["default"]
         bg, fg, field = t["bg"], t["fg"], t["field"]
 
         win = tk.Toplevel(self.root)
@@ -530,7 +528,7 @@ class App:
 
     def _popup_sem_matricula(self) -> tuple[str, str] | None:
         """Retorna (nome, tipo) ou None se cancelado."""
-        t = TEMAS[self.config["theme"]]
+        t = TEMAS["default"]
         bg, fg, field = t["bg"], t["fg"], t["field"]
         win = tk.Toplevel(self.root)
         win.title("Entrada sem matrícula")
@@ -574,7 +572,7 @@ class App:
         if self._status_job:
             self.root.after_cancel(self._status_job)
 
-        t = TEMAS[self.config["theme"]]
+        t = TEMAS["default"]
         cor = "#c0392b" if erro else t["fg"]
 
         self.lbl_status.config(text=msg, fg=cor)
@@ -823,35 +821,10 @@ class App:
             return
 
         acao = self._undo_stack.pop()
-        tipo = acao["tipo"]
 
         try:
-            if tipo == "entrada":
-                # desfaz: deleta o registro inserido
-                deletar_registro(acao["rid"])
-                self.status(f"Entrada de {acao['nome']} desfeita.")
-
-            elif tipo == "saida":
-                # desfaz: volta status ATIVO, apaga saída
-                with get_conn() as conn:
-                    conn.execute(
-                        "UPDATE registros SET saida=NULL, status='ATIVO' WHERE id=?",
-                        (acao["rid"],),
-                    )
-                self.status(f"Saída de {acao['nome']} desfeita.")
-
-            elif tipo == "remocao":
-                # desfaz: recria o registro deletado
-                restaurar_registro_db(acao["campos"])
-                self.status(f"Remoção de {acao['nome']} desfeita.")
-
-            elif tipo == "edicao":
-                # desfaz: restaura valores anteriores
-                c = acao["antes"]
-                atualizar_registro(c["id"], c["data"], c["entrada"],
-                                   c["saida"] or "", c["maquina"] or "")
-                self.status(f"Edição de {acao['nome']} desfeita.")
-
+            msg = reverter_acao(acao)
+            self.status(msg)
         except Exception as e:
             log.error("Falha no undo: %s", e)
             self.status("Erro ao desfazer.", erro=True)
@@ -942,30 +915,18 @@ class App:
         if not sel:
             return
         rid = int(tree.item(sel[0])["tags"][0])
-        reg = buscar_registro_por_id(rid)
-        if not reg:
+        if not messagebox.askyesno("Confirmar", "Remover registro?", parent=self.root):
             return
-        if messagebox.askyesno("Confirmar", "Remover registro?", parent=self.root):
-            try:
-                # Guarda snapshot antes de deletar
-                self._push_undo({
-                    "tipo":  "remocao",
-                    "nome":  reg[1],
-                    "campos": {
-                        "id": reg[0], "nome": reg[1], "matricula": reg[2],
-                        "data": reg[3], "entrada": reg[4], "saida": reg[5],
-                        "maquina": reg[6], "bolsista": reg[7], "status": reg[8],
-                    },
-                })
-                deletar_registro(rid)
-                self.status("Registro removido.")
-                self._focus_matricula()
-            except Exception as e:
-                self._undo_stack.pop()  # descarta o undo se falhou
-                log.error("Falha ao remover: %s", e)
-                self.status("Erro ao remover registro.", erro=True)
-            self._rebuild_abas()
-            self._atualizar_lista()
+        try:
+            snapshot = servico_remover_registro(rid)
+            self._push_undo(snapshot)
+            self.status("Registro removido.")
+            self._focus_matricula()
+        except Exception as e:
+            log.error("Falha ao remover: %s", e)
+            self.status("Erro ao remover registro.", erro=True)
+        self._rebuild_abas()
+        self._atualizar_lista()
 
     def registrar_servidor(self):
         nome = self._pedir_input("Servidor", "Nome completo:")
@@ -988,7 +949,7 @@ class App:
     # ── Atualização da lista ──────────────────
 
     def _atualizar_lista(self):
-        t = TEMAS[self.config["theme"]]
+        t = TEMAS["default"]
         hoje = agora().strftime("%d/%m/%Y")
 
         # Get selected month from the current_month_key
@@ -1058,91 +1019,68 @@ class App:
 
     # ── Tema ─────────────────────────────────
 
-    def _toggle_tema(self):
-        self.config["theme"] = "light" if self.config["theme"] == "dark" else "dark"
-        save_config(self.config)
-        self._tema_escuro = (self.config["theme"] == "dark")
-        self._aplicar_tema()
-        self._atualizar_lista()
+    def _apply_tk_colors(self, widget, bg: str, fg: str, field: str, select: str):
+        """Recursively apply bg/fg to all classic tk.* widgets under `widget`.
+
+        Skips ttk widgets (they are handled by ttk.Style) and the
+        entry_matricula (handled separately for placeholder logic).
+        """
+        for child in widget.winfo_children():
+            cls = child.winfo_class()
+            if cls in ("Frame",):
+                child.configure(bg=bg)
+            elif cls in ("Label",):
+                child.configure(bg=bg, fg=fg)
+            elif cls in ("Button",):
+                child.configure(bg=field, fg=fg, activebackground=select,
+                                activeforeground=fg,
+                                disabledforeground="#888888",
+                                relief="flat", bd=0, highlightthickness=0)
+            elif cls in ("Entry",) and child is not self.entry_matricula:
+                child.configure(bg=field, fg=fg, insertbackground=fg,
+                                disabledbackground=field,
+                                bd=0, highlightthickness=0)
+            # Recurse into children
+            if child.winfo_children():
+                self._apply_tk_colors(child, bg, fg, field, select)
 
     def _aplicar_tema(self):
-        t = TEMAS[self.config["theme"]]
+        t = TEMAS["default"]
         bg, fg, field, select, row_a, row_b, ativo_bg = (
             t["bg"], t["fg"], t["field"], t["select"], t["row_a"], t["row_b"], t["ativo_bg"]
         )
-        select_btn = "#35383e"  # Slightly darker than select for buttons
 
+        # ── 1. Global option_add ─────────────────────────────────────────
+        self.root.option_add("*Background",       bg,    "interactive")
+        self.root.option_add("*Foreground",       fg,    "interactive")
+        self.root.option_add("*Entry.Background", field, "interactive")
+        self.root.option_add("*Entry.Foreground", fg,    "interactive")
+        self.root.option_add("*Entry.insertBackground", fg, "interactive")
+        self.root.option_add("*Button.Background",       field,  "interactive")
+        self.root.option_add("*Button.Foreground",       fg,     "interactive")
+        self.root.option_add("*Button.activeBackground", select, "interactive")
+        self.root.option_add("*Button.activeForeground", fg,     "interactive")
+        self.root.option_add("*Button.relief",           "flat", "interactive")
+        self.root.option_add("*Button.bd",               0,      "interactive")
+        self.root.option_add("*Button.highlightThickness", 0,    "interactive")
+        self.root.option_add("*Menu.Background",         bg,     "interactive")
+        self.root.option_add("*Menu.Foreground",         fg,     "interactive")
+        self.root.option_add("*Menu.activeBackground",   select, "interactive")
+        self.root.option_add("*Menu.activeForeground",   fg,     "interactive")
+        # Combobox internal Listbox
+        self.root.option_add("*TCombobox*Listbox.Background",      field,  "interactive")
+        self.root.option_add("*TCombobox*Listbox.Foreground",      fg,     "interactive")
+        self.root.option_add("*TCombobox*Listbox.SelectBackground", select, "interactive")
+        self.root.option_add("*TCombobox*Listbox.SelectForeground", fg,     "interactive")
+
+        # ── 2. ttk.Style ────────────────────────────────────────────────
         style = ttk.Style()
         style.theme_use("default")
 
-        self.root.configure(bg=bg)
-        self.header.configure(bg=bg)
-        self.toolbar.configure(bg=bg)
-        self.tree_frame.configure(bg=bg)
-        self.bottom_bar.configure(bg=bg)
-
-        self.sep_header.configure(bg=field)
-
-        self.lbl_title.configure(bg=bg, fg=fg)
-        self.lbl_clock.configure(bg=bg, fg=fg)
-        self.lbl_selecionados.configure(bg=bg, fg=fg)
-        self.lbl_registros.configure(bg=bg, fg=fg)
-        self.lbl_status.configure(bg=bg, fg=fg)
-
-        # Filter frame background
-        self._filter_frame.configure(bg=bg)
-
-        # Toolbar buttons
-        self.btn_entrada.configure(bg=field, fg=fg, activebackground=select, disabledforeground="#888888",
-                                   relief="flat", bd=0, highlightthickness=0)
-        self.btn_saida.configure(bg=field, fg=fg, activebackground=select, disabledforeground="#888888",
-                                 relief="flat", bd=0, highlightthickness=0)
-        self.btn_desfazer.configure(bg=field, fg=fg, activebackground=select,
-                                     relief="flat", bd=0, highlightthickness=0)
-
-        # Style filter buttons in header
-        for nome, btn in self._btns_filtro.items():
-            ativo = nome == self.var_filtro.get()
-            btn.configure(
-                bg=select if ativo else field, fg=fg,
-                activebackground=select,
-                relief="sunken" if ativo else "raised",
-                bd=0, highlightthickness=0,
-            )
-
-        # Style month button (like filter buttons but always enabled)
-        self._month_btn.configure(
-            bg=field, fg=fg, activebackground=select,
-            relief="raised", bd=0, highlightthickness=0
-        )
-
-        # Style dropdown arrow button - same as month button for unified look
-        self._month_dropdown_btn.configure(
-            bg=field, fg=fg, activebackground=select,
-            relief="raised", bd=0, highlightthickness=0
-        )
-
-        # Apply dark theme to month menu
-        self._month_menu.config(
-            bg=field, fg=fg,
-            activebackground=select, activeforeground=fg,
-            tearoff=0,
-        )
-
-        if not self.entry_matricula.get() or self.entry_matricula.get() == "Matrícula":
-            self.entry_matricula.configure(bg=field, fg="#B5BAC1", insertbackground=fg, disabledbackground=field,
-                                           bd=0, highlightthickness=0)
-        else:
-            self.entry_matricula.configure(bg=field, fg=fg, insertbackground=fg, disabledbackground=field,
-                                           bd=0, highlightthickness=0)
-
-        # Define a slightly darker selection color for buttons
-        select_btn = "#35383e"  # Slightly darker than select (#404249)
-
-        # Configure dark theme for all ttk widgets
-        style.configure("TFrame", background=bg, foreground=fg)
-        style.configure("TLabel", background=bg, foreground=fg)
-        style.configure("TButton", background=select_btn, foreground=fg, borderwidth=0, highlightthickness=0)
+        style.configure("TFrame",  background=bg)
+        style.configure("TLabel",  background=bg, foreground=fg)
+        style.configure("TButton", background=field, foreground=fg,
+                        borderwidth=0, highlightthickness=0)
         style.configure("TCombobox",
             fieldbackground=field, background=field, foreground=fg,
             borderwidth=0, highlightthickness=0)
@@ -1150,15 +1088,6 @@ class App:
             fieldbackground=[("readonly", field)],
             background=[("readonly", field)],
             foreground=[("readonly", fg)])
-
-        # Apply dark theme to Combobox dropdown via Tk option database
-        # The dropdown Listbox is created internally by Tk and must be styled
-        # via option_add since ttk.Style doesn't affect it
-        self.root.option_add("*TCombobox*Listbox.Background", field)
-        self.root.option_add("*TCombobox*Listbox.Foreground", fg)
-        self.root.option_add("*TCombobox*Listbox.SelectBackground", select)
-        self.root.option_add("*TCombobox*Listbox.SelectForeground", fg)
-
         style.configure("Treeview",
             background=bg, foreground=fg, fieldbackground=field,
             borderwidth=0, highlightthickness=0)
@@ -1168,32 +1097,77 @@ class App:
             background=field, foreground=fg, borderwidth=0, highlightthickness=0)
         style.map("Treeview.Heading",
             background=[("active", field)])
-
-        # Configure vertical scrollbar
         style.configure("Vertical.TScrollbar",
-            background=field, troughcolor=bg, arrowcolor=fg, borderwidth=0, highlightthickness=0)
+            background=field, troughcolor=bg, arrowcolor=fg,
+            borderwidth=0, highlightthickness=0)
         style.map("Vertical.TScrollbar",
             background=[("active", select)],
             arrowcolor=[("active", select)])
         self.tree_scroll.configure(style="Vertical.TScrollbar")
 
-        # Configure menu button
-        self.btn_menu.configure(bg=field, fg=fg, activebackground=select, relief="flat")
+        # ── 3. Recursive walk: main-window tk.* widgets ─────────────────
+        # Applies colours to already-created widgets without naming each one.
+        self.root.configure(bg=bg)
+        self._apply_tk_colors(self.root, bg, fg, field, select)
 
-        # Configure menus with dark theme
+        # ── 4. Widgets requiring conditional / special logic ─────────────
+
+        # Separator uses `field`, not `bg`
+        self.sep_header.configure(bg=field)
+
+        # Filter buttons: active button gets select bg + sunken relief
+        for nome, btn in self._btns_filtro.items():
+            ativo = nome == self.var_filtro.get()
+            btn.configure(
+                bg=select if ativo else field, fg=fg,
+                activebackground=select,
+                relief="sunken" if ativo else "raised",
+                bd=0, highlightthickness=0,
+            )
+
+        # Month selector buttons always look like inactive filter buttons
+        self._month_btn.configure(
+            bg=field, fg=fg, activebackground=select,
+            relief="raised", bd=0, highlightthickness=0,
+        )
+        self._month_dropdown_btn.configure(
+            bg=field, fg=fg, activebackground=select,
+            relief="raised", bd=0, highlightthickness=0,
+        )
+
+        # Month drop-down menu
+        self._month_menu.config(
+            bg=field, fg=fg,
+            activebackground=select, activeforeground=fg,
+            tearoff=0,
+        )
+
+        # Entry placeholder: grey when showing placeholder text, normal fg otherwise
+        if not self.entry_matricula.get() or self.entry_matricula.get() == "Matrícula":
+            self.entry_matricula.configure(bg=field, fg="#B5BAC1",
+                                           insertbackground=fg,
+                                           disabledbackground=field,
+                                           bd=0, highlightthickness=0)
+        else:
+            self.entry_matricula.configure(bg=field, fg=fg,
+                                           insertbackground=fg,
+                                           disabledbackground=field,
+                                           bd=0, highlightthickness=0)
+
+        # Application menu and its sub-menus
         self.menu.configure(background=bg, foreground=fg,
-                           activebackground=select, activeforeground=fg,
-                           bd=0, relief="flat")
-        # Reconfigure export_menu - it's a child of self.menu
+                            activebackground=select, activeforeground=fg,
+                            bd=0, relief="flat")
         for item in self.menu.winfo_children():
             if isinstance(item, tk.Menu):
                 item.configure(background=bg, foreground=fg,
-                              activebackground=select, activeforeground=fg,
-                              bd=0, relief="flat")
+                               activebackground=select, activeforeground=fg,
+                               bd=0, relief="flat")
 
-        self.tree.tag_configure("0", background=row_a)
-        self.tree.tag_configure("1", background=row_b)
-        self.tree.tag_configure("ATIVO", background=ativo_bg)
+        # Treeview row tags (Treeview-specific API, not covered by Style)
+        self.tree.tag_configure("0",          background=row_a)
+        self.tree.tag_configure("1",          background=row_b)
+        self.tree.tag_configure("ATIVO",      background=ativo_bg)
         self.tree.tag_configure("FINALIZADO", background=bg)
 
     def _ao_fechar(self):
@@ -1312,7 +1286,7 @@ class App:
             except Exception:
                 pass
 
-        t = TEMAS[self.config["theme"]]
+        t = TEMAS["default"]
         info_win = tk.Toplevel(self.root)
         info_win.title("Exportado")
         info_win.configure(bg=t["bg"])
@@ -1398,7 +1372,7 @@ class App:
             messagebox.showinfo("Copiar Dados", "Copiado para a área de transferência", parent=self.root)
 
     def _abrir_copiar_personalizado(self):
-        t = TEMAS[self.config["theme"]]
+        t = TEMAS["default"]
         bg, fg, field, select = t["bg"], t["fg"], t["field"], t["select"]
         win = tk.Toplevel(self.root)
         win.title("Copiar dados para planilha")
@@ -1568,7 +1542,7 @@ class App:
     # ── Janelas auxiliares ────────────────────
 
     def _visualizar_db(self):
-        t = TEMAS[self.config["theme"]]
+        t = TEMAS["default"]
         bg, fg, field, select = t["bg"], t["fg"], t["field"], t["select"]
         win = tk.Toplevel(self.root)
         win.title("Banco de Dados")
@@ -1638,7 +1612,7 @@ class App:
         nb.bind("<<NotebookTabChanged>>", lambda _: filtrar())
 
     def _abrir_bolsistas(self):
-        t = TEMAS[self.config["theme"]]
+        t = TEMAS["default"]
         bg, fg, field = t["bg"], t["fg"], t["field"]
         select_btn = "#35383e"
         win = tk.Toplevel(self.root)
@@ -1674,7 +1648,7 @@ class App:
                   bg=select_btn, fg=fg).pack()
 
     def _abrir_alunos(self):
-        t = TEMAS[self.config["theme"]]
+        t = TEMAS["default"]
         bg, fg, field = t["bg"], t["fg"], t["field"]
         select_btn = "#35383e"
         win = tk.Toplevel(self.root)
@@ -1761,7 +1735,7 @@ class App:
             return
         _, nome, _, data, entrada, saida, maquina, _, _ = reg
 
-        t = TEMAS[self.config["theme"]]
+        t = TEMAS["default"]
         bg, fg, field = t["bg"], t["fg"], t["field"]
         win = tk.Toplevel(self.root)
         win.title(f"Editar — {nome}")
@@ -1951,7 +1925,7 @@ class App:
         win.bind("<KP_Enter>", lambda _: salvar())
 
     def _pedir_input(self, titulo: str, mensagem: str) -> str | None:
-        t = TEMAS[self.config["theme"]]
+        t = TEMAS["default"]
         bg, fg, field = t["bg"], t["fg"], t["field"]
         win = tk.Toplevel(self.root)
         win.title(titulo)

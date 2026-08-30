@@ -17,7 +17,7 @@ def _get_db():
 
 def load_config() -> dict:
     if not os.path.exists(CONFIG_FILE):
-        return {"theme": "light", "exported_months": [], "ultimo_bolsista": None, "open_export_folder": True}
+        return {"exported_months": [], "ultimo_bolsista": None, "open_export_folder": True}
     cfg = json.load(open(CONFIG_FILE, "r"))
     cfg.setdefault("exported_months", [])
     cfg.setdefault("ultimo_bolsista", None)
@@ -187,3 +187,77 @@ def processar_entrada(matricula: str | None, nome: str, maquina: str, bolsista: 
         ).fetchone()[0]
 
     return {"status": "entrada_registrada", "rid": rid, "nome": nome, "hora": now.strftime("%H:%M")}
+
+
+# ─────────────────────────────────────────────
+# SERVIÇO: DESFAZER (UNDO)
+# ─────────────────────────────────────────────
+
+def reverter_acao(acao: dict) -> str:
+    """Reverte uma ação na base de dados com base no dict da pilha de undo.
+
+    Retorna a mensagem de status a ser exibida pela UI.
+    Lança exceção em caso de falha de banco de dados.
+    Não acessa self, não toca em Tkinter.
+    """
+    db = _get_db()
+    tipo = acao["tipo"]
+
+    if tipo == "entrada":
+        # desfaz: deleta o registro inserido
+        db.deletar_registro(acao["rid"])
+        return f"Entrada de {acao['nome']} desfeita."
+
+    elif tipo == "saida":
+        # desfaz: volta status ATIVO, apaga saída
+        with db.get_conn() as conn:
+            conn.execute(
+                "UPDATE registros SET saida=NULL, status='ATIVO' WHERE id=?",
+                (acao["rid"],),
+            )
+        return f"Saída de {acao['nome']} desfeita."
+
+    elif tipo == "remocao":
+        # desfaz: recria o registro deletado
+        db.restaurar_registro_db(acao["campos"])
+        return f"Remoção de {acao['nome']} desfeita."
+
+    elif tipo == "edicao":
+        # desfaz: restaura valores anteriores
+        c = acao["antes"]
+        db.atualizar_registro(c["id"], c["data"], c["entrada"],
+                              c["saida"] or "", c["maquina"] or "")
+        return f"Edição de {acao['nome']} desfeita."
+
+    raise ValueError(f"Tipo de undo desconhecido: {tipo!r}")
+
+
+# ─────────────────────────────────────────────
+# SERVIÇO: REMOÇÃO DE REGISTRO
+# ─────────────────────────────────────────────
+
+def remover_registro(rid: int) -> dict:
+    """Busca o registro, apaga-o e retorna o snapshot para a pilha de undo.
+
+    Retorna dict pronto para ser passado ao _push_undo() da UI:
+      {"tipo": "remocao", "nome": str, "campos": {...}}
+
+    Lança exceção em caso de falha de banco de dados.
+    Não acessa self, não abre janelas Tkinter.
+    """
+    db = _get_db()
+    reg = db.buscar_registro_por_id(rid)
+    if not reg:
+        raise ValueError(f"Registro {rid} não encontrado.")
+
+    snapshot = {
+        "tipo":  "remocao",
+        "nome":  reg[1],
+        "campos": {
+            "id": reg[0], "nome": reg[1], "matricula": reg[2],
+            "data": reg[3], "entrada": reg[4], "saida": reg[5],
+            "maquina": reg[6], "bolsista": reg[7], "status": reg[8],
+        },
+    }
+    db.deletar_registro(rid)
+    return snapshot
