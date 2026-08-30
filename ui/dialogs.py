@@ -747,6 +747,7 @@ def abrir_form_edicao(parent, rid: int, on_success_callback=None):
                 "antes": {
                     "id": rid, "data": data, "entrada": entrada,
                     "saida": saida, "maquina": maquina, "nome": nome,
+                    "matricula": reg[2],
                 },
             }
             atualizar_registro(rid, nova_data, nova_entrada, nova_saida, nova_maquina)

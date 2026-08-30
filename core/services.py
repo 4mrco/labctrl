@@ -227,6 +227,7 @@ def reverter_acao(acao: dict) -> str:
         c = acao["antes"]
         db.atualizar_registro(c["id"], c["data"], c["entrada"],
                               c["saida"] or "", c["maquina"] or "")
+        db.atualizar_aluno(c["matricula"], c["nome"])
         return f"Edição de {acao['nome']} desfeita."
 
     raise ValueError(f"Tipo de undo desconhecido: {tipo!r}")
