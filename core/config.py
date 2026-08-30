@@ -22,7 +22,7 @@ BOLSISTAS_INICIAIS = [
 ]
 
 TEMAS = {
-    "default": {"bg": "#1E1F22", "fg": "#FFFFFF", "field": "#313338", "select": "#404249",
+    "default": {"bg": "#1E1F22", "fg": "#FFFFFF", "field": "#282A2E", "select": "#404249",
                 "ativo_bg": "#2A3B5A", "row_a": "#2B2D31", "row_b": "#25272B"},
 }
 

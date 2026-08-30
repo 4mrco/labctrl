@@ -966,34 +966,59 @@ class App:
 
         # ── 2. ttk.Style ────────────────────────────────────────────────
         style = ttk.Style()
-        style.theme_use("default")
+        style.theme_use("clam")  # "clam" respects bordercolor/lightcolor/darkcolor on Linux
 
         style.configure("TFrame",  background=bg)
         style.configure("TLabel",  background=bg, foreground=fg)
         style.configure("TButton", background=field, foreground=fg,
-                        borderwidth=0, highlightthickness=0)
+                        borderwidth=0, highlightthickness=0,
+                        bordercolor=bg, lightcolor=bg, darkcolor=bg)
+        style.map("TButton",
+            background=[("active", select)],
+            foreground=[("active", fg)])
         style.configure("TCombobox",
             fieldbackground=field, background=field, foreground=fg,
-            borderwidth=0, highlightthickness=0)
+            bordercolor=bg, lightcolor=bg, darkcolor=bg, arrowcolor=fg,
+            borderwidth=0, relief="flat", highlightthickness=0)
         style.map("TCombobox",
-            fieldbackground=[("readonly", field)],
-            background=[("readonly", field)],
-            foreground=[("readonly", fg)])
+            fieldbackground=[("readonly", field), ("disabled", bg)],
+            background=[("readonly", field), ("active", field)],
+            foreground=[("readonly", fg)],
+            bordercolor=[("focus", bg)],
+            lightcolor=[("focus", bg)],
+            darkcolor=[("focus", bg)])
         style.configure("Treeview",
-            background=bg, foreground=fg, fieldbackground=field,
-            borderwidth=0, highlightthickness=0)
+            background=field, foreground=fg, fieldbackground=field,
+            bordercolor=bg, lightcolor=bg, darkcolor=bg,
+            borderwidth=0, relief="flat", highlightthickness=0)
         style.map("Treeview",
-            background=[("selected", select)])
+            background=[("selected", select)],
+            foreground=[("selected", fg)])
         style.configure("Treeview.Heading",
-            background=field, foreground=fg, borderwidth=0, highlightthickness=0)
+            background=bg, foreground=fg,
+            bordercolor=bg, lightcolor=bg, darkcolor=bg,
+            borderwidth=0, highlightthickness=0, relief="flat")
         style.map("Treeview.Heading",
-            background=[("active", field)])
+            background=[("active", bg)])
         style.configure("Vertical.TScrollbar",
             background=field, troughcolor=bg, arrowcolor=fg,
-            borderwidth=0, highlightthickness=0)
+            bordercolor=bg, lightcolor=bg, darkcolor=bg,
+            borderwidth=0, relief="flat", highlightthickness=0)
         style.map("Vertical.TScrollbar",
             background=[("active", select)],
             arrowcolor=[("active", select)])
+        style.configure("TScrollbar",
+            background=field, troughcolor=bg, arrowcolor=fg,
+            bordercolor=bg, lightcolor=bg, darkcolor=bg,
+            borderwidth=0, relief="flat", highlightthickness=0)
+        style.configure("TNotebook",
+            background=bg, bordercolor=bg, lightcolor=bg, darkcolor=bg)
+        style.configure("TNotebook.Tab",
+            background=field, foreground=fg,
+            bordercolor=bg, lightcolor=bg, darkcolor=bg, padding=[8, 4])
+        style.map("TNotebook.Tab",
+            background=[("selected", select)],
+            foreground=[("selected", fg)])
         self.tree_scroll.configure(style="Vertical.TScrollbar")
 
         # ── 3. Recursive walk: main-window tk.* widgets ─────────────────
