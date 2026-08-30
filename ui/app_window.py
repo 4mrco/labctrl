@@ -127,7 +127,9 @@ class App:
         self._tick_relogio()
 
         self.root.protocol("WM_DELETE_WINDOW", self._ao_fechar)
-        self.root.bind_all("<Control-z>", self._on_ctrl_z)
+        self.root.bind_all("<Control-z>", self._desfazer)
+        self.root.bind_all("<Control-Z>", self._desfazer)
+        self.root.bind_all("<Control-Key-z>", self._desfazer)
         self.root.after(500, self._verificar_export_pendente)
         self.root.after(800, self._verificar_orfaos)
 
@@ -679,14 +681,16 @@ class App:
         if mat and mat != "Matrícula":
             self.entry_matricula.select_range(0, tk.END)
 
-    def _on_ctrl_z(self, event=None):
-        """Handler para Ctrl+Z global que protege widgets de texto."""
-        widget = self.root.focus_get()
-        # Protege widgets Entry e Text para não interferir em edição
-        if isinstance(widget, (tk.Entry, tk.Text)):
-            return
-        self._desfazer()
-        self.status("Última ação desfeita (Ctrl+Z).")
+    def _show_toast(self, message):
+        toast = tk.Toplevel(self.root)
+        toast.overrideredirect(True)
+        toast.configure(bg="#e74c3c")
+        tk.Label(toast, text=message, bg="#e74c3c", fg="white", font=("Arial", 10, "bold"), padx=15, pady=8).pack()
+        toast.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - toast.winfo_width()) // 2
+        y = self.root.winfo_rooty() + self.root.winfo_height() - toast.winfo_height() - 50
+        toast.geometry(f"+{x}+{y}")
+        self.root.after(2500, toast.destroy)
 
     def _on_bolsista_change(self, event=None):
         """Salva o bolsista selecionado ao mudar a escolha."""
@@ -695,9 +699,10 @@ class App:
             self.config["ultimo_bolsista"] = selecionado
             save_config(self.config)
 
-    def _desfazer(self):
+    def _desfazer(self, event=None):
         if not self._undo_stack:
             self.status("Nada para desfazer.", erro=True)
+            if event: return "break"
             return
 
         acao = self._undo_stack.pop()
@@ -708,11 +713,13 @@ class App:
         except Exception as e:
             log.error("Falha no undo: %s", e)
             self.status("Erro ao desfazer.", erro=True)
+            if event: return "break"
             return
 
         self._rebuild_abas()
         self._atualizar_lista()
         self._focus_matricula()
+        if event: return "break"
 
     def _fluxo_entrada(self, matricula: str | None, nome: str) -> bool:
         """UI glue: chama o serviço de entrada e reage ao resultado."""
@@ -749,6 +756,10 @@ class App:
         # Handle placeholder text
         if matricula == "Matrícula" or matricula == "":
             matricula = ""
+
+        if matricula and len(matricula) < 6:
+            self._show_toast("A matrícula deve ter 6 dígitos.")
+            return
 
         if not matricula:
             res = popup_sem_matricula(self.root)
