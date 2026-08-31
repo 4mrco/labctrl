@@ -102,7 +102,7 @@ def mostrar_sobre(parent: tk.Tk | tk.Toplevel):
     bind_enter_to_button(win, close_btn)
 
 
-def pedir_input(parent: tk.Tk | tk.Toplevel, titulo: str, mensagem: str) -> str | None:
+def pedir_input(parent: tk.Tk | tk.Toplevel, titulo: str, mensagem: str, valor_inicial: str = "") -> str | None:
     t = TEMAS["default"]
     bg, fg, field = t["bg"], t["fg"], t["field"]
     win = tk.Toplevel(parent)
@@ -114,6 +114,9 @@ def pedir_input(parent: tk.Tk | tk.Toplevel, titulo: str, mensagem: str) -> str 
 
     entry = tk.Entry(win, bd=0, highlightthickness=0, bg=field, fg=fg)
     entry.pack(padx=10, pady=5)
+    if valor_inicial:
+        entry.insert(0, valor_inicial)
+        entry.select_range(0, tk.END)
 
     resultado = {"valor": None}
 
@@ -225,7 +228,7 @@ def abrir_copiar_personalizado(parent, mes_ativo: str):
     win = tk.Toplevel(parent)
     win.title("Copiar dados para planilha")
     win.configure(bg=bg)
-    setup_dialog(win, parent, min_width=500, min_height=400, resizable=(False, False), escape_close=True)
+    setup_dialog(win, parent, min_width=650, min_height=450, resizable=(True, True), escape_close=True)
 
     var_periodo = tk.StringVar(value=mes_ativo)
     periodo_cb = ttk.Combobox(win, textvariable=var_periodo, values=buscar_meses(), width=15, state="readonly")
@@ -250,6 +253,7 @@ def abrir_copiar_personalizado(parent, mes_ativo: str):
     def bind_mousewheel(widget):
         widget.bind("<Button-4>", on_mousewheel)
         widget.bind("<Button-5>", on_mousewheel)
+        widget.bind("<MouseWheel>", on_mousewheel)
         for child in widget.winfo_children():
             bind_mousewheel(child)
 
@@ -316,18 +320,12 @@ def abrir_copiar_personalizado(parent, mes_ativo: str):
 
             # Add date divider with "Todos esta dia" checkbox
             if data != ultima_data:
-                divider = tk.Label(scroll_frame, text=data, bg=bg, fg=fg, font=("Arial", 9, "bold"))
-                divider.pack(anchor="w", pady=(8, 2))
-
-                # "Todos esta dia" checkbox
                 var_dia = tk.IntVar()
                 var_por_data[data] = []
-                cb_dia = tk.Checkbutton(scroll_frame, text="TODOS (DIA)", variable=var_dia, bd=0, highlightthickness=0,
+                cb_dia = tk.Checkbutton(scroll_frame, text=data, variable=var_dia, font=("Arial", 11, "bold"), bd=0, highlightthickness=0,
                                         bg=bg, fg=fg, selectcolor=select, activebackground=select,
                                         activeforeground=fg, relief="flat", command=lambda d=data, v=var_dia: toggle_dia(d, v))
-                cb_dia.pack(anchor="center")
-                # Separator below "todos (dia)"
-                tk.Frame(scroll_frame, height=1, bg="#333").pack(fill="x", pady=(4, 2))
+                cb_dia.pack(anchor="w", pady=(15, 8))
                 ultima_data = data
 
             var = tk.IntVar()
@@ -351,6 +349,8 @@ def abrir_copiar_personalizado(parent, mes_ativo: str):
             tk.Label(row_frame, text=mat, width=12, anchor="center", bg=bg, fg=fg).pack(side="left")
             tk.Label(row_frame, text="|", width=1, bg=bg, fg=fg).pack(side="left")
             aluno_cbs.append(row_frame)
+
+        bind_mousewheel(scroll_frame)
 
     periodo_cb.bind("<<ComboboxSelected>>", lambda _: (atualizar_alunos(), var_todos.set(0)))
     atualizar_alunos()
@@ -396,87 +396,158 @@ def visualizar_db(parent):
     win = tk.Toplevel(parent)
     win.title("Banco de Dados")
     win.configure(bg=bg)
-    setup_dialog(win, parent, min_width=600, min_height=400, resizable=(True, True), escape_close=True)
+    setup_dialog(win, parent, min_width=700, min_height=500, resizable=(True, True), escape_close=True)
 
-    top_bar = tk.Frame(win, bg=bg)
-    top_bar.pack(fill="x", padx=6, pady=(6, 2))
-    tk.Label(top_bar, text="🔍", bg=bg, fg=fg).pack(side="left")
+    # ── Apply clam styles once ───────────────────────────────────
+    style_db = ttk.Style()
+    style_db.theme_use("clam")
+    style_db.configure("Treeview", background=field, foreground=fg,
+                       fieldbackground=field, bordercolor=bg,
+                       lightcolor=bg, darkcolor=bg,
+                       borderwidth=0, relief="flat", highlightthickness=0)
+    style_db.map("Treeview",
+                background=[("selected", select)],
+                foreground=[("selected", fg)])
+    style_db.configure("Treeview.Heading", background=bg, foreground=fg,
+                       bordercolor=bg, lightcolor=bg, darkcolor=bg,
+                       borderwidth=0, highlightthickness=0, relief="flat")
+    style_db.map("Treeview.Heading", background=[("active", bg)])
+    style_db.configure("Vertical.TScrollbar",
+                       background=field, troughcolor=bg, arrowcolor=fg,
+                       bordercolor=bg, lightcolor=bg, darkcolor=bg,
+                       borderwidth=0, relief="flat", highlightthickness=0)
+    style_db.configure("TCombobox",
+                       fieldbackground=field, background=field, foreground=fg,
+                       bordercolor=bg, lightcolor=bg, darkcolor=bg, arrowcolor=fg,
+                       borderwidth=0, relief="flat", highlightthickness=0)
+    style_db.map("TCombobox",
+                fieldbackground=[("readonly", field)],
+                background=[("readonly", field)],
+                foreground=[("readonly", fg)])
+
+    # ── TOP: Dashboard cards ─────────────────────────────────────
+    dash_frame = tk.Frame(win, bg=bg)
+    dash_frame.pack(fill="x", padx=10, pady=(10, 10))
+
+    var_visitas = tk.StringVar(value="-")
+    var_pessoas = tk.StringVar(value="-")
+    var_tempo   = tk.StringVar(value="-")
+    var_media   = tk.StringVar(value="-")
+
+    muted = "#888888"
+    for titulo, var in [
+        ("Total de Visitas",   var_visitas),
+        ("Pessoas Únicas",     var_pessoas),
+        ("Tempo Total",        var_tempo),
+        ("Permanência Média",  var_media),
+    ]:
+        card = tk.Frame(dash_frame, bg=bg)
+        card.pack(side="left", expand=True)
+        tk.Label(card, text=titulo, font=("Arial", 9), fg=muted, bg=bg).pack()
+        tk.Label(card, textvariable=var, font=("Arial", 14, "bold"), fg=fg, bg=bg).pack()
+
+    # ── MIDDLE: Controls (Month Combobox + Search) ───────────────
+    control_frame = tk.Frame(win, bg=bg)
+    control_frame.pack(fill="x", padx=10, pady=(0, 8))
+
+    meses = buscar_meses()
+    var_mes = tk.StringVar(value=meses[0] if meses else "")
+    combo_mes = ttk.Combobox(control_frame, textvariable=var_mes,
+                              values=meses, width=12, state="readonly")
+    combo_mes.pack(side="left")
+
+    tk.Label(control_frame, text="🔍", bg=bg, fg=fg).pack(side="right", padx=(8, 0))
     var_busca = tk.StringVar()
-    tk.Entry(top_bar, textvariable=var_busca, width=30, bd=0, highlightthickness=0,
-             bg=field, fg=fg).pack(side="left", padx=4)
+    tk.Entry(control_frame, textvariable=var_busca, width=28, bd=0, highlightthickness=0,
+             bg=field, fg=fg).pack(side="right", padx=(0, 8))
 
-    nb = ttk.Notebook(win)
-    nb.pack(fill="both", expand=True, padx=6, pady=4)
+    # ── BOTTOM: Single Treeview ──────────────────────────────────
+    tree_frame = tk.Frame(win, bg=bg)
+    tree_frame.pack(fill="both", expand=True, padx=6, pady=(0, 6))
 
-    cols  = ("Nome", "Matrícula", "Data", "Entrada", "Saída", "Máquina", "Bolsista")
-    trees: dict[str, ttk.Treeview] = {}
-    todos: dict[str, list[tuple]]  = {}
+    cols = ("Nome", "Matrícula", "Data", "Entrada", "Saída", "Máquina", "Bolsista")
+    tree = ttk.Treeview(tree_frame, columns=cols, show="headings")
+    col_widths = {"Nome": 160, "Matrícula": 90, "Data": 90, "Entrada": 70,
+                  "Saída": 70, "Máquina": 70, "Bolsista": 120}
+    for col in cols:
+        tree.heading(col, text=col)
+        tree.column(col, width=col_widths.get(col, 80), anchor="center")
+    tree.column("Nome", anchor="w")
 
-    for mes in buscar_meses():
-        frame = tk.Frame(nb, bg=bg)
-        nb.add(frame, text=mes)
-        tree = ttk.Treeview(frame, columns=cols, show="headings")
-        for col in cols:
-            tree.heading(col, text=col)
-        tree.pack(fill="both", expand=True)
-        style_db = ttk.Style()
-        style_db.theme_use("clam")
-        style_db.configure("Treeview", background=field, foreground=fg,
-                           fieldbackground=field, bordercolor=bg,
-                           lightcolor=bg, darkcolor=bg,
-                           borderwidth=0, relief="flat", highlightthickness=0)
-        style_db.map("Treeview",
-                    background=[("selected", select)],
-                    foreground=[("selected", fg)])
-        style_db.configure("Treeview.Heading", background=bg, foreground=fg,
-                           bordercolor=bg, lightcolor=bg, darkcolor=bg,
-                           borderwidth=0, highlightthickness=0, relief="flat")
-        style_db.map("Treeview.Heading", background=[("active", bg)])
-        style_db.configure("Vertical.TScrollbar",
-                           background=field, troughcolor=bg, arrowcolor=fg,
-                           bordercolor=bg, lightcolor=bg, darkcolor=bg,
-                           borderwidth=0, relief="flat", highlightthickness=0)
-        style_db.configure("TNotebook",
-                           background=bg, bordercolor=bg, lightcolor=bg, darkcolor=bg)
-        style_db.configure("TNotebook.Tab",
-                           background=field, foreground=fg,
-                           bordercolor=bg, lightcolor=bg, darkcolor=bg, padding=[8, 4])
-        style_db.map("TNotebook.Tab",
-                    background=[("selected", select)],
-                    foreground=[("selected", fg)])
-        trees[mes] = tree
+    vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+    tree.configure(yscrollcommand=vsb.set)
+    vsb.pack(side="right", fill="y")
+    tree.pack(fill="both", expand=True)
 
+    # ── Load all month data once ─────────────────────────────────
+    todos: dict[str, list[tuple]] = {}
+    for mes in meses:
         dados = buscar_registros_por_mes(mes)
         todos[mes] = []
         for r in dados:
             _, nome, matricula, data, entrada, saida, maquina, bolsista, _ = r
-            # Handle matricula like main list does
             if not matricula:
                 mat_exib = ""
             elif matricula == "SERVIDOR":
                 mat_exib = "Servidor"
             elif matricula.startswith("SRV-"):
-                mat_exib = "servidor"
+                mat_exib = "Servidor"
             else:
                 mat_exib = matricula
             row = (nome, mat_exib, data, entrada, saida or "", maquina or "-", bolsista or "")
             todos[mes].append(row)
-            tree.insert("", "end", values=row)
 
-    def filtrar(*_):
-        tab = nb.select()
-        if not tab:
+    # ── Helpers ──────────────────────────────────────────────────
+    def _fmt_mins(total_mins: int) -> str:
+        return f"{total_mins // 60}h {total_mins % 60:02d}m"
+
+    # ── Unified update function ──────────────────────────────────
+    def atualizar_tela(*_):
+        mes_atual = var_mes.get()
+        if not mes_atual or mes_atual not in todos:
             return
-        mes   = nb.tab(tab, "text")
-        tree  = trees[mes]
         termo = var_busca.get().lower()
+
+        # Populate treeview (filtered)
         tree.delete(*tree.get_children())
-        for row in todos[mes]:
-            if termo in row[0].lower() or termo in str(row[1]).lower():
+        for row in todos[mes_atual]:
+            if not termo or termo in row[0].lower() or termo in str(row[1]).lower():
                 tree.insert("", "end", values=row)
 
-    var_busca.trace_add("write", filtrar)
-    nb.bind("<<NotebookTabChanged>>", lambda _: filtrar())
+        # Calculate stats from full (unfiltered) month data
+        rows = todos[mes_atual]
+        visitas = len(rows)
+        pessoas = len({row[1] if row[1] else row[0] for row in rows})
+
+        total_mins = 0
+        valid_exits = 0
+        for row in rows:
+            entrada_str = row[3]
+            saida_str   = row[4]
+            if not saida_str or not entrada_str:
+                continue
+            try:
+                ent = datetime.strptime(entrada_str.strip(), "%H:%M")
+                sai = datetime.strptime(saida_str.strip(),   "%H:%M")
+                delta = int((sai - ent).total_seconds() // 60)
+                if delta > 0:
+                    total_mins  += delta
+                    valid_exits += 1
+            except ValueError:
+                pass
+
+        media_mins = (total_mins // valid_exits) if valid_exits else 0
+
+        var_visitas.set(str(visitas))
+        var_pessoas.set(str(pessoas))
+        var_tempo.set(_fmt_mins(total_mins) if valid_exits else "-")
+        var_media.set(_fmt_mins(media_mins) if valid_exits else "-")
+
+    combo_mes.bind("<<ComboboxSelected>>", atualizar_tela)
+    var_busca.trace_add("write", atualizar_tela)
+    atualizar_tela()
+
+
 
 
 def abrir_bolsistas(parent, on_success_callback=None):
@@ -486,36 +557,89 @@ def abrir_bolsistas(parent, on_success_callback=None):
     win = tk.Toplevel(parent)
     win.title("Bolsistas")
     win.configure(bg=bg)
-    setup_dialog(win, parent, min_width=300, min_height=250, resizable=(True, True), escape_close=True)
+    setup_dialog(win, parent, min_width=450, min_height=350, resizable=(True, True), escape_close=True)
 
-    lista = tk.Listbox(win, bg=field, fg=fg,
-                      highlightthickness=0, bd=0)
-    lista.pack(fill="both", expand=True)
-    for b in buscar_bolsistas():
-        lista.insert(tk.END, b)
+    # ── Treeview ────────────────────────────────────────────────
+    tree_frame = tk.Frame(win, bg=bg)
+    tree_frame.pack(fill="both", expand=True, padx=10, pady=(10, 5))
 
+    style_bolsistas = ttk.Style()
+    style_bolsistas.theme_use("clam")
+    style_bolsistas.configure("Treeview", background=field, foreground=fg,
+                              fieldbackground=field, bordercolor=bg,
+                              lightcolor=bg, darkcolor=bg,
+                              borderwidth=0, relief="flat", highlightthickness=0)
+    style_bolsistas.map("Treeview",
+                        background=[("selected", select_btn)],
+                        foreground=[("selected", fg)])
+    style_bolsistas.configure("Treeview.Heading", background=bg, foreground=fg,
+                              bordercolor=bg, lightcolor=bg, darkcolor=bg,
+                              borderwidth=0, highlightthickness=0, relief="flat")
+    style_bolsistas.map("Treeview.Heading", background=[("active", bg)])
+    style_bolsistas.configure("Vertical.TScrollbar",
+                              background=field, troughcolor=bg, arrowcolor=fg,
+                              bordercolor=bg, lightcolor=bg, darkcolor=bg,
+                              borderwidth=0, relief="flat", highlightthickness=0)
+
+    tree = ttk.Treeview(tree_frame, columns=("Nome",), show="headings", selectmode="browse")
+    tree.heading("Nome", text="Nome do Bolsista")
+    tree.column("Nome", anchor="w")
+
+    vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+    tree.configure(yscrollcommand=vsb.set)
+    vsb.pack(side="right", fill="y")
+    tree.pack(fill="both", expand=True)
+
+    def recarregar():
+        tree.delete(*tree.get_children())
+        for b in buscar_bolsistas():
+            tree.insert("", "end", values=(b,), tags=(b,))
+
+    recarregar()
+
+    # ── Actions ──────────────────────────────────────────────────
     def adicionar():
-        nome = pedir_input(parent, "Adicionar", "Nome:")
+        nome = pedir_input(win, "Adicionar", "Nome:")
         if nome:
             inserir_bolsista(nome)
-            lista.insert(tk.END, nome)
+            recarregar()
             if on_success_callback:
                 on_success_callback()
-            
+
+    def editar():
+        sel = tree.selection()
+        if not sel:
+            messagebox.showinfo("Editar", "Selecione um bolsista primeiro.", parent=win)
+            return
+        nome_atual = tree.item(sel[0])["values"][0]
+        novo_nome = pedir_input(win, "Editar", "Nome:", valor_inicial=nome_atual)
+        if novo_nome and novo_nome != nome_atual:
+            deletar_bolsista(nome_atual)
+            inserir_bolsista(novo_nome)
+            recarregar()
+            if on_success_callback:
+                on_success_callback()
 
     def remover():
-        sel = lista.curselection()
-        if sel:
-            nome = lista.get(sel)
+        sel = tree.selection()
+        if not sel:
+            messagebox.showinfo("Remover", "Selecione um bolsista primeiro.", parent=win)
+            return
+        nome = tree.item(sel[0])["values"][0]
+        if messagebox.askyesno("Remover", f"Remover '{nome}'?", parent=win):
             deletar_bolsista(nome)
-            lista.delete(sel)
+            recarregar()
             if on_success_callback:
                 on_success_callback()
 
-    tk.Button(win, text="Adicionar", command=adicionar, bd=0, highlightthickness=0,
-              bg=select_btn, fg=fg).pack()
-    tk.Button(win, text="Remover",   command=remover, bd=0, highlightthickness=0,
-              bg=select_btn, fg=fg).pack()
+    # ── Buttons ───────────────────────────────────────────────────
+    btn_frame = tk.Frame(win, bg=bg)
+    btn_frame.pack(pady=(5, 10))
+    for label, cmd in [("Adicionar", adicionar), ("Editar", editar), ("Remover", remover)]:
+        tk.Button(btn_frame, text=label, command=cmd, bd=0, highlightthickness=0,
+                  bg=select_btn, fg=fg, padx=10, pady=4).pack(side="left", padx=5)
+
+    tree.bind("<Double-1>", lambda _: editar())
 
 
 def abrir_alunos(parent, on_success_callback=None):
