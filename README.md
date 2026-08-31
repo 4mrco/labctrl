@@ -28,7 +28,7 @@ O LabCTRL resolve esse problema na origem. Os alunos registram a própria entrad
 * Autoformatação de horários (`1430` → `14:30`), nomes e número da máquina;
 * Exportação para CSV e cópia direta dos dados para planilhas por dia, semana ou mês;
 * Cadastro de alunos, servidores e bolsistas, mantendo o histórico vinculado à matrícula;
-* Interface com tema claro e escuro, preservando as preferências entre execuções.
+* Interface em Dark Mode otimizada para ambientes Linux com design plano.
 
 ## Tecnologias
 
@@ -40,9 +40,15 @@ O LabCTRL resolve esse problema na origem. Os alunos registram a própria entrad
 
 ```
 labctrl/
-├── app.py              # Aplicação principal
+├── app.py              # Orquestrador e entrypoint
+├── core/               # Regras de negócio e dados
+│   ├── config.py       # Configurações globais e temas
+│   ├── database.py     # Camada de acesso ao SQLite
+│   └── services.py     # Lógica do sistema e histórico (Undo)
+├── ui/                 # Interface gráfica (Tkinter)
+│   ├── app_window.py   # Janela principal e layout base
+│   └── dialogs.py      # Popups, formulários e dashboard
 ├── lab.db              # Banco de dados SQLite
-├── config.json         # Preferências do usuário
 └── lab.log             # Registro de erros
 ```
 
