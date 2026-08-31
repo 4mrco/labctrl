@@ -21,6 +21,25 @@ def get_conn():
         conn.close()
 
 
+def safe_query(default_return):
+    """
+    Decorator to catch 'no such table' errors during background reads,
+    silently run init_db() to auto-heal the schema, and return a safe default.
+    """
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except sqlite3.OperationalError as e:
+                if "no such table" in str(e).lower():
+                    log.warning(f"Auto-healing DB schema due to error: {e}")
+                    init_db()
+                    return default_return
+                raise
+        return wrapper
+    return decorator
+
+
 def init_db() -> None:
     with get_conn() as conn:
         c = conn.cursor()
@@ -75,6 +94,7 @@ def _migrar_schema(c) -> None:
 
 # ── Alunos ──
 
+@safe_query(None)
 def buscar_aluno(matricula: str) -> tuple | None:
     with get_conn() as conn:
         return conn.execute(
@@ -87,6 +107,7 @@ def inserir_aluno(matricula: str, nome: str, tipo: str = "aluno") -> None:
         conn.execute("INSERT INTO alunos VALUES (?,?,?)", (matricula, nome, tipo))
 
 
+@safe_query([])
 def buscar_todos_alunos() -> list[tuple]:
     with get_conn() as conn:
         return conn.execute(
@@ -125,6 +146,7 @@ def finalizar_registro(rid: int, hora_saida: str | None) -> None:
         )
 
 
+@safe_query(None)
 def buscar_registro_ativo(matricula: str) -> int | None:
     with get_conn() as conn:
         row = conn.execute(
@@ -136,6 +158,7 @@ def buscar_registro_ativo(matricula: str) -> int | None:
     return row[0] if row else None
 
 
+@safe_query(None)
 def buscar_registro_por_id(rid: int) -> tuple | None:
     with get_conn() as conn:
         return conn.execute(
@@ -170,6 +193,7 @@ def restaurar_registro_db(campos: dict) -> None:
         )
 
 
+@safe_query([])
 def buscar_registros_por_mes(mes: str) -> list[tuple]:
     with get_conn() as conn:
         return conn.execute(
@@ -179,6 +203,7 @@ def buscar_registros_por_mes(mes: str) -> list[tuple]:
         ).fetchall()
 
 
+@safe_query([])
 def buscar_registros_orfaos() -> list[tuple]:
     hoje = datetime.now().strftime("%d/%m/%Y")
     with get_conn() as conn:
@@ -189,6 +214,7 @@ def buscar_registros_orfaos() -> list[tuple]:
         ).fetchall()
 
 
+@safe_query(0)
 def contar_registros_hoje(hoje: str) -> int:
     with get_conn() as conn:
         return conn.execute(
@@ -196,6 +222,7 @@ def contar_registros_hoje(hoje: str) -> int:
         ).fetchone()[0]
 
 
+@safe_query(0)
 def contar_ativos() -> int:
     with get_conn() as conn:
         return conn.execute(
@@ -203,6 +230,7 @@ def contar_ativos() -> int:
         ).fetchone()[0]
 
 
+@safe_query([])
 def buscar_meses() -> list[str]:
     with get_conn() as conn:
         datas = [r[0] for r in conn.execute(
@@ -214,6 +242,7 @@ def buscar_meses() -> list[str]:
 
 # ── Export queries ──
 
+@safe_query([])
 def buscar_export_mes(mes: str) -> list[tuple]:
     with get_conn() as conn:
         return conn.execute(
@@ -223,6 +252,7 @@ def buscar_export_mes(mes: str) -> list[tuple]:
         ).fetchall()
 
 
+@safe_query([])
 def buscar_export_dia(dia: str) -> list[tuple]:
     with get_conn() as conn:
         return conn.execute(
@@ -232,6 +262,7 @@ def buscar_export_dia(dia: str) -> list[tuple]:
         ).fetchall()
 
 
+@safe_query(([], ""))
 def buscar_export_ontem() -> tuple[list[tuple], str]:
     """Retorna (dados, label_data) do dia anterior."""
     ontem = (date.today() - timedelta(days=1)).strftime("%d/%m/%Y")
@@ -244,6 +275,7 @@ def buscar_export_ontem() -> tuple[list[tuple], str]:
     return dados, ontem
 
 
+@safe_query([])
 def buscar_export_semana(datas: list[str]) -> list[tuple]:
     ph = ",".join("?" * len(datas))
     with get_conn() as conn:
@@ -256,6 +288,7 @@ def buscar_export_semana(datas: list[str]) -> list[tuple]:
 
 # ── Bolsistas ──
 
+@safe_query([])
 def buscar_bolsistas() -> list[str]:
     with get_conn() as conn:
         return [r[0] for r in conn.execute("SELECT nome FROM bolsistas").fetchall()]
