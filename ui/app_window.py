@@ -115,6 +115,7 @@ class App:
         # estado de ordenação por coluna
         self._sort_state: dict = {}
         self._status_job = None
+        self._relogio_job = None
         # pilha de undo: lista de dicts {tipo, ...dados para reverter}
         self._undo_stack: list[dict] = []
 
@@ -125,7 +126,7 @@ class App:
         self._atualizar_lista()
         self._tick_relogio()
 
-        self.root.protocol("WM_DELETE_WINDOW", self._ao_fechar)
+        self.root.protocol("WM_DELETE_WINDOW", self.fechar_aplicacao)
         self.root.bind_all("<Control-z>", self._desfazer)
         self.root.bind_all("<Control-Z>", self._desfazer)
         self.root.bind_all("<Control-Key-z>", self._desfazer)
@@ -905,7 +906,7 @@ class App:
 
     def _tick_relogio(self):
         self.lbl_clock.config(text=agora().strftime("%H:%M"))
-        self.root.after(1000, self._tick_relogio)
+        self._relogio_job = self.root.after(1000, self._tick_relogio)
 
     # ── Tema ─────────────────────────────────
 
@@ -1085,17 +1086,26 @@ class App:
         self.tree.tag_configure("ATIVO",      background=ativo_bg)
         self.tree.tag_configure("FINALIZADO", background=bg)
 
-    def _ao_fechar(self):
-        ativos = contar_ativos()
-        if ativos > 0:
-            resp = messagebox.askyesno(
-                "Atenção",
-                f"Há {ativos} pessoa(s) ainda dentro do laboratório.\n"
-                "Deseja mesmo fechar o sistema?",
-                parent=self.root
-            )
-            if not resp:
-                return
+    def fechar_aplicacao(self):
+        try:
+            ativos = contar_ativos()
+            if ativos > 0:
+                resp = messagebox.askyesno(
+                    "Atenção",
+                    f"Há {ativos} pessoa(s) ainda dentro do laboratório.\n"
+                    "Deseja mesmo fechar o sistema?",
+                    parent=self.root
+                )
+                if not resp:
+                    return
+        except Exception:
+            pass
+
+        if getattr(self, "_status_job", None):
+            self.root.after_cancel(self._status_job)
+        if getattr(self, "_relogio_job", None):
+            self.root.after_cancel(self._relogio_job)
+
         self.root.destroy()
 
     # ── Verificações no startup ───────────────
