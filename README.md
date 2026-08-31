@@ -1,61 +1,84 @@
 # LabCTRL
 
-Sistema de controle de acesso para laboratório universitário, desenvolvido para substituir o processo manual de registro em papel seguido de transcrição para planilhas — um fluxo lento, repetitivo e sujeito a erros.
+![Python](https://img.shields.io/badge/Python-3.10+-blue.svg?logo=python&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-Database-lightgrey.svg?logo=sqlite)
+![Tkinter](https://img.shields.io/badge/GUI-Tkinter-green.svg)
+![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-O LabCTRL centraliza o registro de entrada, saída e histórico de utilização em uma interface desktop simples, eliminando a etapa de transcrição manual e oferecendo visibilidade em tempo real de quem está presente no laboratório.
-
-
+Sistema de controle de acesso para laboratório universitário. Substitui o registro manual em papel e a transcrição de dados. O LabCTRL centraliza entradas, saídas e histórico em uma interface desktop, reduzindo drasticamente o trabalho manual dos bolsistas e oferecendo visibilidade em tempo real da ocupação do ambiente.
 
 ## Motivação
 
-O laboratório utilizava um processo inteiramente manual: os alunos registravam entrada e saída em papel e, posteriormente, um bolsista transcrevia essas informações para uma planilha do Google Sheets.
+O controle de acesso era um procedimento manual e fragmentado: registrar no papel, transcrever para planilhas e consolidar depois. Esse fluxo gerava:
 
-Esse fluxo apresentava diversos problemas:
+* **Inconsistência:** Erros de transcrição de nomes, matrículas e horários.
+* **Atraso:** Falta de sincronia entre o registro físico e os dados na planilha.
+* **Ponto Cego:** Impossibilidade de visualizar quem estava utilizando o laboratório em tempo real.
+* **Retrabalho:** Desperdício de horas úteis dos bolsistas em tarefas repetitivas.
 
-* Erros de transcrição (nomes, matrículas e horários);
-* Atraso entre o registro real e os dados disponíveis na planilha;
-* Impossibilidade de visualizar, em tempo real, quem estava utilizando o laboratório;
-* Trabalho repetitivo e evitável para os bolsistas.
+O LabCTRL resolve o problema na origem. O usuário digita apenas a matrícula no teclado numérico, e o sistema valida, formata e persiste os dados de forma autônoma em um banco local relacional.
 
-O LabCTRL resolve esse problema na origem. Os alunos registram a própria entrada utilizando um teclado dedicado, digitando apenas a matrícula, enquanto o sistema organiza automaticamente os registros e os mantém prontos para consulta, edição e exportação.
+## Engenharia e Arquitetura
+
+O LabCTRL adota uma arquitetura modular que isola dados, lógica e interface — a base para as próximas fases de hardware e nuvem. A interface foi reescrita sob um design moderno em Dark Mode, otimizado para ambientes Linux, com rotinas básicas de auto-recuperação do banco e encerramento seguro da aplicação.
+
+* **Desacoplamento (Core vs. UI):** Persistência de dados (SQLite) e lógica de negócio isoladas da interface gráfica (Tkinter). Alterações visuais ou de fluxo não comprometem a integridade das transações do banco.
 
 ## Funcionalidades
 
-* Registro de entrada e saída em poucos segundos, por matrícula ou por nome (para usuários sem matrícula cadastrada);
-* Visualização em tempo real de quem está presente, com filtros por data e registros ativos;
-* Histórico organizado por mês, com edição e remoção de registros;
-* Sistema de desfazer (*Undo*) para entradas, saídas, edições e remoções durante a sessão;
-* Autoformatação de horários (`1430` → `14:30`), nomes e número da máquina;
-* Exportação para CSV e cópia direta dos dados para planilhas por dia, semana ou mês;
-* Cadastro de alunos, servidores e bolsistas, mantendo o histórico vinculado à matrícula;
-* Interface em Dark Mode otimizada para ambientes Linux com design plano.
+* **Gestão completa do ciclo de acesso:** entrada, saída, histórico e edição de registros.
+* **Controle de usuários e perfis:** alunos, servidores e bolsistas, com histórico vinculado à matrícula.
+* **Registro ágil:** entrada e saída em segundos via matrícula ou nome, com perfis temporários para usuários não cadastrados.
+* **Dashboard em tempo real:** visão da ocupação do ambiente, com filtros por data e status de atividade.
+* **Autoformatação inteligente:** correção autônoma de inputs (`1430` para `14:30`), padronização de nomes e validação de estações de trabalho.
+* **Sistema de desfazer (Undo):** reversão segura de entradas, saídas, edições e remoções durante a sessão.
+* **Relatórios e exportação:** geração de CSV e cópia direta formatada para planilhas, organizados por dia, semana ou mês.
 
-## Tecnologias
+## Instalação e Implantação
 
-* **Python**
-* **Tkinter** (interface gráfica)
-* **SQLite** (armazenamento local)
+### Pré-requisitos
 
-## Estrutura
+* Python 3.10 ou superior.
+* Pacote `tkinter` (Debian/Ubuntu: `sudo apt install python3-tk` | Fedora-based distros: `sudo dnf install python3-tkinter`).
 
+### Produção (Laboratório — Recomendado)
+
+1. Acesse a aba [Releases](https://github.com/4mrco/labctrl/releases) do repositório.
+2. Baixe e extraia o pacote `Source code (zip)` da versão estável mais recente.
+3. Execute o inicializador:
+
+```bash
+python3 app.py
 ```
+
+## Estrutura de Diretórios
+
+```text
 labctrl/
-├── app.py              # Orquestrador e entrypoint
-├── core/               # Regras de negócio e dados
-│   ├── config.py       # Configurações globais e temas
-│   ├── database.py     # Camada de acesso ao SQLite
-│   └── services.py     # Lógica do sistema e histórico (Undo)
-├── ui/                 # Interface gráfica (Tkinter)
-│   ├── app_window.py   # Janela principal e layout base
+├── app.py              # Entrypoint e orquestrador principal
+├── core/               # Lógica de Negócios e Dados
+│   ├── config.py       # Configurações globais, constantes e tema
+│   ├── database.py     # Transações SQLite e auto-recuperação
+│   └── services.py     # Histórico, Undo Stack e formatação
+├── ui/                 # Interface Gráfica (Tkinter)
+│   ├── app_window.py   # Janela principal, event loop e binds
 │   └── dialogs.py      # Popups, formulários e dashboard
-├── lab.db              # Banco de dados SQLite
-└── lab.log             # Registro de erros
+└── hardware/           # Coming soon (integração com leitor RFID)
 ```
+
+## Roadmap
+
+* [x] **Atual:** Arquitetura modular, refatoração de interface e gestão de usuários.
+* [ ] **Fase 2 (Cloud):** Integração com a API do Google Sheets para espelhamento e backup automatizado na nuvem.
+* [ ] **Fase 3 (Hardware):** Integração serial com ESP32 para leitura de tags RFID/NFC, transformando o registro por teclado em autenticação física instantânea.
+
 
 ## Status
 
-O LabCTRL encontra-se em uso ativo no laboratório e continua recebendo melhorias incrementais baseadas na utilização diária e no feedback dos bolsistas.
+O LabCTRL está em uso ativo no laboratório e recebe melhorias incrementais baseadas na utilização diária e no feedback dos bolsistas.
 
-## Autor
+## Autor e Licença
 
-Desenvolvido por **Marco Aurélio** (@4mrco) durante a Bolsa de Iniciação Acadêmica da Universidade Federal do Ceará (UFC), com o objetivo de modernizar e simplificar o processo de controle de acesso do laboratório.
+Desenvolvido por **Marco Aurélio** (@4mrco) durante a Bolsa de Iniciação Acadêmica da Universidade Federal do Ceará (UFC - Campus Sobral).
+
+Distribuído sob a Licença MIT. Consulte o arquivo `LICENSE` para mais detalhes.
