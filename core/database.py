@@ -3,7 +3,7 @@ import logging
 from contextlib import contextmanager
 from datetime import datetime, date, timedelta
 
-from core.config import DB_FILE, SCHEMA_VERSION, BOLSISTAS_INICIAIS
+from core.config import DB_FILE, SCHEMA_VERSION
 
 log = logging.getLogger(__name__)
 
@@ -52,8 +52,6 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_registros_matricula
                 ON registros(matricula);
         """)
-        for nome in BOLSISTAS_INICIAIS:
-            c.execute("INSERT OR IGNORE INTO bolsistas VALUES (?)", (nome,))
         _migrar_schema(c)
 
 

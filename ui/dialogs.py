@@ -177,7 +177,8 @@ def popup_sem_matricula(parent: tk.Tk | tk.Toplevel) -> tuple[str, str] | None:
     return resultado["valor"]
 
 
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
+import csv
 import logging
 from datetime import datetime
 from core.database import (
@@ -590,10 +591,20 @@ def abrir_bolsistas(parent, on_success_callback=None):
     vsb.pack(side="right", fill="y")
     tree.pack(fill="both", expand=True)
 
+    # btn_importar is defined below; recarregar references it via closure
+    _btn_importar_ref = []
+
     def recarregar():
         tree.delete(*tree.get_children())
-        for b in buscar_bolsistas():
+        lista = buscar_bolsistas()
+        for b in lista:
             tree.insert("", "end", values=(b,), tags=(b,))
+        # Show Import button only when list is empty
+        if _btn_importar_ref:
+            if len(lista) == 0:
+                _btn_importar_ref[0].pack(side="left", padx=5)
+            else:
+                _btn_importar_ref[0].pack_forget()
 
     recarregar()
 
@@ -632,12 +643,44 @@ def abrir_bolsistas(parent, on_success_callback=None):
             if on_success_callback:
                 on_success_callback()
 
+    def importar_csv():
+        path = filedialog.askopenfilename(
+            parent=win,
+            title="Importar lista de bolsistas",
+            filetypes=[("CSV files", "*.csv"), ("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        importados = 0
+        try:
+            with open(path, newline="", encoding="utf-8-sig") as f:
+                reader = csv.reader(f)
+                for row in reader:
+                    if row:
+                        nome = row[0].strip()
+                        if nome:
+                            inserir_bolsista(nome)
+                            importados += 1
+        except Exception as e:
+            messagebox.showerror("Erro", f"Falha ao importar: {e}", parent=win)
+            return
+        recarregar()
+        if on_success_callback:
+            on_success_callback()
+        messagebox.showinfo("Importar", f"{importados} bolsista(s) importado(s).", parent=win)
+
     # ── Buttons ───────────────────────────────────────────────────
     btn_frame = tk.Frame(win, bg=bg)
     btn_frame.pack(pady=(5, 10))
     for label, cmd in [("Adicionar", adicionar), ("Editar", editar), ("Remover", remover)]:
         tk.Button(btn_frame, text=label, command=cmd, bd=0, highlightthickness=0,
                   bg=select_btn, fg=fg, padx=10, pady=4).pack(side="left", padx=5)
+
+    btn_importar = tk.Button(btn_frame, text="Importar CSV", command=importar_csv,
+                             bd=0, highlightthickness=0, bg=select_btn, fg=fg, padx=10, pady=4)
+    _btn_importar_ref.append(btn_importar)
+    # Trigger visibility check now that btn_importar is registered
+    recarregar()
 
     tree.bind("<Double-1>", lambda _: editar())
 
