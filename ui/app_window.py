@@ -36,7 +36,6 @@ from core.config import (
     DB_FILE,
     SCHEMA_VERSION,
     EXPORT_DIR,
-    BOLSISTAS_INICIAIS,
     TEMAS,
     COL_NAMES
 )
