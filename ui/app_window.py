@@ -91,7 +91,7 @@ from core.services import (
 from ui.dialogs import (
     mostrar_sobre, pedir_input, popup_sem_matricula,
     setup_dialog, focus_first_field, bind_enter_to_button,
-    abrir_copiar_personalizado, visualizar_db, abrir_bolsistas,
+    visualizar_db, abrir_bolsistas,
     abrir_alunos, abrir_form_edicao, copiar_periodo
 )
 # ─────────────────────────────────────────────
@@ -394,7 +394,6 @@ class App:
         copiar_menu.add_command(label="Ontem",       command=lambda: copiar_periodo(self.root, "Ontem", self._mes_ativo()))
         copiar_menu.add_command(label="Semana",      command=lambda: copiar_periodo(self.root, "Semana", self._mes_ativo()))
         copiar_menu.add_command(label="Mês",         command=lambda: copiar_periodo(self.root, "Mês", self._mes_ativo()))
-        copiar_menu.add_command(label="Personalizado", command=lambda: abrir_copiar_personalizado(self.root, self._mes_ativo()))
         self.menu.add_cascade(label="Copiar Dados", menu=copiar_menu)
         self.menu.add_separator()
         
