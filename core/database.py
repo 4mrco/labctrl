@@ -168,12 +168,12 @@ def buscar_registro_por_id(rid: int) -> tuple | None:
         ).fetchone()
 
 
-def atualizar_registro(rid: int, data: str, entrada: str, saida: str, maquina: str) -> None:
+def atualizar_registro(rid: int, nome: str, data: str, entrada: str, saida: str, maquina: str) -> None:
     status = "FINALIZADO" if saida else "ATIVO"
     with get_conn() as conn:
         conn.execute(
-            "UPDATE registros SET data=?,entrada=?,saida=?,maquina=?,status=? WHERE id=?",
-            (data, entrada, saida or None, maquina, status, rid),
+            "UPDATE registros SET nome=?, data=?, entrada=?, saida=?, maquina=?, status=? WHERE id=?",
+            (nome, data, entrada, saida or None, maquina, status, rid),
         )
 
 
