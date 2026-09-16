@@ -784,8 +784,8 @@ def abrir_form_edicao(parent, rid: int, on_success_callback=None):
                     "matricula": reg[2],
                 },
             }
-            atualizar_registro(rid, nova_data, nova_entrada, nova_saida, nova_maquina)
-            if novo_nome != nome:
+            atualizar_registro(rid, novo_nome, nova_data, nova_entrada, nova_saida, nova_maquina)
+            if reg[2] and novo_nome != nome:
                 atualizar_aluno(reg[2], novo_nome)  # reg[2] is matricula
             status_msg = f"Registro de {novo_nome} atualizado."
         except Exception as e:
