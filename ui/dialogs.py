@@ -1,3 +1,4 @@
+import os
 import tkinter as tk
 from core.config import TEMAS
 
@@ -62,22 +63,129 @@ def bind_enter_to_button(widget: tk.Widget, button: tk.Button):
     widget.bind("<KP_Enter>", lambda e: button.invoke())
 
 
+def mostrar_toast(parent: tk.Tk | tk.Toplevel, mensagem: str, duration: int = 4000):
+    """Display a subtle, self-dismissing toast notification at the bottom-right."""
+    toast = tk.Toplevel(parent)
+    toast.overrideredirect(True)
+    toast.configure(bg="#222222")
+    toast.attributes("-topmost", True)
+    
+    lbl = tk.Label(toast, text=mensagem, bg="#222222", fg="#FFFFFF", font=("Arial", 10), padx=15, pady=8)
+    lbl.pack()
+    
+    toast.update_idletasks()
+    
+    # Position bottom-right of parent window
+    px, py = parent.winfo_rootx(), parent.winfo_rooty()
+    pw, ph = parent.winfo_width(), parent.winfo_height()
+    tw, th = toast.winfo_width(), toast.winfo_height()
+    
+    # Padding from edges
+    pad_x = 20
+    pad_y = 20
+    
+    x = px + pw - tw - pad_x
+    y = py + ph - th - pad_y
+    toast.geometry(f"+{x}+{y}")
+    
+    toast.after(duration, toast.destroy)
+
+
+def renderizar_changelog(widget: tk.Text, raw_text: str):
+    """Lightweight Markdown renderer for CHANGELOG.md content.
+
+    Supports only the syntax actually used in LabCTRL:
+      # h1  ## h2  ### h3  - bullet  **bold**  `code`
+    Everything else is plain text.
+    """
+    import re
+    t = TEMAS["default"]
+    fg  = t["fg"]
+    bg  = t["bg"]
+    field = t["field"]
+
+    # ── Tag definitions ─────────────────────────────────────────────
+    widget.tag_configure("h1",     font=("Segoe UI", 13, "bold"),   foreground=fg,        spacing1=12, spacing3=4)
+    widget.tag_configure("h2",     font=("Segoe UI", 11, "bold"),   foreground=fg,        spacing1=10, spacing3=2)
+    widget.tag_configure("h3",     font=("Segoe UI", 10, "bold"),   foreground="#b0c4de", spacing1=8,  spacing3=1)
+    widget.tag_configure("bullet", font=("Segoe UI", 9),            foreground=fg,        lmargin1=12, lmargin2=24)
+    widget.tag_configure("normal", font=("Segoe UI", 9),            foreground=fg)
+    widget.tag_configure("bold",   font=("Segoe UI", 9, "bold"),   foreground=fg)
+    widget.tag_configure("code",   font=("TkFixedFont",),           foreground="#a8d8ea",
+                         background=field, relief="flat")
+    widget.tag_configure("hr",     font=("Segoe UI", 5),            foreground="#555")
+
+    # ── Inline parser: splits a line into (text, tag) chunks ────────
+    _BOLD = re.compile(r"\*\*(.+?)\*\*")
+    _CODE = re.compile(r"`([^`]+)`")
+    _LINK = re.compile(r"!?\[([^\]]+)\]\([^)]+\)")  # strip markdown links
+
+    def _insert_inline(line: str, base_tag: str):
+        """Parse inline **bold** and `code`, inserting mixed chunks."""
+        # Strip markdown link syntax, keep display text
+        line = _LINK.sub(r"\1", line)
+        pattern = re.compile(r"(\*\*[^*]+\*\*|`[^`]+`)")
+        parts = pattern.split(line)
+        for part in parts:
+            if _BOLD.fullmatch(part):
+                widget.insert("end", _BOLD.fullmatch(part).group(1), ("bold",))
+            elif _CODE.fullmatch(part):
+                widget.insert("end", _CODE.fullmatch(part).group(1), ("code",))
+            elif part:
+                widget.insert("end", part, (base_tag,))
+
+    # ── Line-by-line rendering ───────────────────────────────────────
+    widget.configure(state="normal")
+    widget.delete("1.0", "end")
+
+    for raw_line in raw_text.splitlines():
+        line = raw_line.rstrip()
+
+        if line.startswith("# "):
+            widget.insert("end", line[2:] + "\n", ("h1",))
+        elif line.startswith("## "):
+            widget.insert("end", line[3:] + "\n", ("h2",))
+        elif line.startswith("### "):
+            widget.insert("end", line[4:] + "\n", ("h3",))
+        elif line.startswith("---"):
+            widget.insert("end", "\u2015" * 48 + "\n", ("hr",))
+        elif line.startswith("- ") or line.startswith("* "):
+            widget.insert("end", "\u2022 ", ("bullet",))
+            _insert_inline(line[2:], "bullet")
+            widget.insert("end", "\n")
+        elif line == "":
+            widget.insert("end", "\n")
+        else:
+            _insert_inline(line, "normal")
+            widget.insert("end", "\n")
+
+    widget.configure(state="disabled")
+
+
 def mostrar_sobre(parent: tk.Tk | tk.Toplevel):
     """Open the about dialog."""
+    from tkinter.scrolledtext import ScrolledText
     t = TEMAS["default"]
     bg, fg, field = t["bg"], t["fg"], t["field"]
 
     win = tk.Toplevel(parent)
     win.title("Sobre")
     win.configure(bg=bg)
-    setup_dialog(win, parent, min_width=400, min_height=200, resizable=(False, False), escape_close=True)
+    setup_dialog(win, parent, min_width=500, min_height=350, resizable=(True, True), escape_close=True)
+
+    from tkinter import ttk
+    notebook = ttk.Notebook(win)
+    notebook.pack(fill="both", expand=True, padx=10, pady=10)
+
+    frame_sobre = tk.Frame(notebook, bg=bg)
+    notebook.add(frame_sobre, text=" Sobre ")
 
     # Title
-    tk.Label(win, text="LabCTRL", font=(None, 14, "bold"),
+    tk.Label(frame_sobre, text="LabCTRL", font=(None, 14, "bold"),
              bg=bg, fg=fg).pack(pady=(15, 5))
 
     # Subtitle
-    tk.Label(win, text="Sistema de Controle de Acesso de Laboratório",
+    tk.Label(frame_sobre, text="Sistema de Controle de Acesso de Laboratório",
              bg=bg, fg=fg).pack(pady=(0, 10))
 
     # Content - Text widget for selectable text (styled like a label)
@@ -89,17 +197,36 @@ def mostrar_sobre(parent: tk.Tk | tk.Toplevel):
         "Autor: Marco (@4mrco)\n"
         "Contato: marco.aurelio@alu.ufc.br"
     )
-    text_widget = tk.Text(win, wrap="word", bg=bg, fg=fg, relief="flat",
-                          highlightthickness=0, font=(None, 9), padx=5, pady=5, bd=0)
-    text_widget.pack(padx=15, pady=10)
+    text_widget = tk.Text(frame_sobre, wrap="word", bg=bg, fg=fg, relief="flat",
+                          highlightthickness=0, font=(None, 9), padx=5, pady=5, bd=0, height=8)
+    text_widget.pack(padx=15, pady=(0, 5), fill="x")
     text_widget.insert("1.0", texto)
     text_widget.configure(state="disabled", cursor="")  # Disabled but selectable
+
+    # Tab 2: Changelog
+    frame_notas = tk.Frame(notebook, bg=bg)
+    notebook.add(frame_notas, text=" Notas da Versão ")
+
+    # Embedded CHANGELOG.md
+    from core.config import BASE_DIR
+    changelog_path = os.path.join(BASE_DIR, "CHANGELOG.md")
+    try:
+        with open(changelog_path, "r", encoding="utf-8") as f:
+            changelog_txt = f.read()
+    except Exception:
+        changelog_txt = "(Não foi possível carregar as notas de versão.)"
+
+    cl = ScrolledText(frame_notas, wrap="word", bg=field, fg=fg, relief="flat",
+                      highlightthickness=0, font=("Segoe UI", 9), padx=8, pady=6, bd=0)
+    cl.pack(padx=10, pady=10, fill="both", expand=True)
+    renderizar_changelog(cl, changelog_txt)
 
     # Close button
     close_btn = tk.Button(win, text="Fechar", width=10, command=win.destroy,
               bg="#35383e", fg=fg, bd=0, highlightthickness=0)
     close_btn.pack(pady=(0, 15))
     bind_enter_to_button(win, close_btn)
+
 
 
 def pedir_input(parent: tk.Tk | tk.Toplevel, titulo: str, mensagem: str, valor_inicial: str = "") -> str | None:
@@ -197,7 +324,8 @@ def gerar_csv(dados: list[tuple]) -> str:
     linhas = ["Data,Horário Entrada,Horário Saída,Nome,Matrícula,Máquina (Nº),Nome do bolsista presente"]
     for data, entrada, saida, nome, mat, maquina, bolsista in dados:
         mat_fmt = "" if not mat or mat == "SERVIDOR" else mat
-        linhas.append(f"{data},{entrada},{saida or ''},{nome},{mat_fmt},{maquina or ''},{bolsista or ''}")
+        maq_exib = "ML" if str(maquina).startswith("ML-") else maquina
+        linhas.append(f"{data},{entrada},{saida or ''},{nome},{mat_fmt},{maq_exib or ''},{bolsista or ''}")
     return "\n".join(linhas)
 
 def copiar_periodo(parent, periodo: str, mes_ativo: str):
@@ -216,7 +344,8 @@ def copiar_periodo(parent, periodo: str, mes_ativo: str):
         linhas = []
         for data, entrada, saida, nome, matricula, maquina, bolsista in dados:
             mat_fmt = "" if not matricula or matricula == "SERVIDOR" else matricula
-            linhas.append(f"{data}\t{entrada}\t{saida or ''}\t{nome}\t{mat_fmt}\t{maquina or ''}\t{bolsista or ''}")
+            maq_exib = "ML" if str(maquina).startswith("ML-") else maquina
+            linhas.append(f"{data}\t{entrada}\t{saida or ''}\t{nome}\t{mat_fmt}\t{maq_exib or ''}\t{bolsista or ''}")
         texto = "\n".join(linhas)
         parent.clipboard_clear()
         parent.clipboard_append(texto)
@@ -332,7 +461,8 @@ def visualizar_db(parent):
                 mat_exib = "Servidor"
             else:
                 mat_exib = matricula
-            row = (nome, mat_exib, data, entrada, saida or "", maquina or "-", bolsista or "")
+            maq_exib = "ML" if str(maquina).startswith("ML-") else maquina
+            row = (nome, mat_exib, data, entrada, saida or "", maq_exib or "-", bolsista or "")
             todos[mes].append(row)
 
     # ── Helpers ──────────────────────────────────────────────────
@@ -629,7 +759,7 @@ def abrir_form_edicao(parent, rid: int, on_success_callback=None):
         ("Data (DD/MM/AAAA)",   data),
         ("Entrada (HH:MM)",     entrada),
         ("Saída (HH:MM)",       saida or ""),
-        ("Máquina",             maquina or ""),
+        ("Máquina",             "ML" if str(maquina).startswith("ML-") else (maquina or "")),
     ]
     for i, (label, valor) in enumerate(defs):
         tk.Label(win, text=label, bg=bg, fg=fg).grid(row=i, column=0, sticky="w", padx=10, pady=4)
@@ -749,6 +879,10 @@ def abrir_form_edicao(parent, rid: int, on_success_callback=None):
         nova_entrada = format_hora_on_save(campos["Entrada (HH:MM)"].get().strip())
         nova_saida   = format_hora_on_save(campos["Saída (HH:MM)"].get().strip()) if campos["Saída (HH:MM)"].get().strip() else ""
         nova_maquina = format_maquina_on_save(campos["Máquina"].get().strip())
+        
+        # Preserve original ML-X if the user left it as "ML"
+        if nova_maquina == "ML" and str(maquina).startswith("ML-"):
+            nova_maquina = maquina
 
         # Update fields with formatted values
         campos["Entrada (HH:MM)"].delete(0, tk.END)

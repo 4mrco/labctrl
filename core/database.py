@@ -231,6 +231,15 @@ def contar_ativos() -> int:
 
 
 @safe_query([])
+def buscar_maquinas_ocupadas() -> list[str]:
+    """Retorna lista de máquinas em uso (status ATIVO), incluindo repetições para ML."""
+    with get_conn() as conn:
+        return [r[0] for r in conn.execute(
+            "SELECT maquina FROM registros WHERE status='ATIVO' AND maquina IS NOT NULL AND maquina != '-'"
+        ).fetchall()]
+
+
+@safe_query([])
 def buscar_meses() -> list[str]:
     with get_conn() as conn:
         datas = [r[0] for r in conn.execute(

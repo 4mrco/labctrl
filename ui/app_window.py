@@ -59,6 +59,7 @@ from core.database import (
     buscar_registros_orfaos,
     contar_registros_hoje,
     contar_ativos,
+    buscar_maquinas_ocupadas,
     buscar_meses,
     buscar_export_mes,
     buscar_export_dia,
@@ -87,16 +88,22 @@ from core.services import (
     processar_entrada,
     reverter_acao,
     remover_registro as servico_remover_registro,
+    executar_backup_diario,
+    abrir_diretorio_so,
 )
 from ui.dialogs import (
     mostrar_sobre, pedir_input, popup_sem_matricula,
     setup_dialog, focus_first_field, bind_enter_to_button,
     visualizar_db, abrir_bolsistas,
-    abrir_alunos, abrir_form_edicao, copiar_periodo
+    abrir_alunos, abrir_form_edicao, copiar_periodo,
+    mostrar_toast
 )
+from ui.mapa import selecionar_maquina
+
 # ─────────────────────────────────────────────
-# DIALOG UTILITIES
+# VERSION
 # ─────────────────────────────────────────────
+VERSAO_ATUAL = "1.1"
 
 
 
@@ -132,8 +139,88 @@ class App:
         self.root.bind_all("<Control-Key-z>", self._desfazer)
         self.root.after(500, self._verificar_export_pendente)
         self.root.after(800, self._verificar_orfaos)
+        
+        # Check if missed a backup by > 1 day
+        try:
+            ultimo_bkp_str = self.config.get("ultimo_backup", "")
+            if ultimo_bkp_str:
+                ultimo_bkp_date = datetime.strptime(ultimo_bkp_str, "%Y-%m-%d").date()
+                if (date.today() - ultimo_bkp_date).days > 1:
+                    executar_backup_diario()
+                    mostrar_toast(self.root, "Backup em atraso realizado com sucesso!")
+        except Exception:
+            pass
+        
+        # Show patch notes popup if new version or within 3-day window
+        self.root.after(1200, self._verificar_novidades)
+
+    # ── Version / Patch Notes ─────────────────
+
+    def _verificar_novidades(self):
+        """Show a patch-notes popup for 3 days after a new version is detected."""
+        versao_gravada = self.config.get("versao_registrada", "")
+        expira_str     = self.config.get("popup_expira_em", "")
+
+        # New version detected → reset 3-day window
+        if versao_gravada != VERSAO_ATUAL:
+            self.config["versao_registrada"] = VERSAO_ATUAL
+            expira = date.today() + timedelta(days=3)
+            self.config["popup_expira_em"] = expira.isoformat()
+            save_config(self.config)
+        else:
+            if not expira_str:
+                return
+            expira = date.fromisoformat(expira_str)
+
+        # Within visibility window?
+        if date.today() > expira:
+            return
+
+        self._abrir_popup_novidades()
+
+    def _abrir_popup_novidades(self):
+        """Render the patch-notes Toplevel."""
+        from tkinter.scrolledtext import ScrolledText
+        from ui.dialogs import renderizar_changelog
+        t = TEMAS["default"]
+        bg, fg, field = t["bg"], t["fg"], t["field"]
+
+        win = tk.Toplevel(self.root)
+        win.title(f"Novidades da Versão {VERSAO_ATUAL}")
+        win.configure(bg=bg)
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.grab_set()
+
+        tk.Label(win, text=f"✨  O que há de novo — v{VERSAO_ATUAL}",
+                 bg=bg, fg=fg, font=("Segoe UI", 12, "bold")).pack(pady=(14, 4), padx=20)
+
+        # Read CHANGELOG.md
+        changelog_path = os.path.join(BASE_DIR, "CHANGELOG.md")
+        try:
+            with open(changelog_path, "r", encoding="utf-8") as f:
+                conteudo = f.read()
+        except Exception:
+            conteudo = "(Não foi possível carregar o changelog.)"
+
+        txt = ScrolledText(win, wrap="word", width=62, height=18,
+                           bg=field, fg=fg, relief="flat",
+                           highlightthickness=0, font=("Segoe UI", 9),
+                           padx=10, pady=8, bd=0)
+        txt.pack(padx=16, pady=(0, 8))
+        renderizar_changelog(txt, conteudo)
+
+        tk.Button(win, text="Entendi", command=win.destroy,
+                  bd=0, highlightthickness=0, bg="#35383e", fg=fg,
+                  padx=30, pady=6, font=("Segoe UI", 10, "bold")).pack(pady=(0, 14))
+
+        win.update_idletasks()
+        px = self.root.winfo_rootx() + (self.root.winfo_width()  - win.winfo_width())  // 2
+        py = self.root.winfo_rooty() + (self.root.winfo_height() - win.winfo_height()) // 2
+        win.geometry(f"+{px}+{py}")
 
     # ── UI base ──────────────────────────────
+
 
     def _build_ui(self):
         # HEADER
@@ -407,6 +494,7 @@ class App:
         self.menu.add_command(label="Bolsistas",           command=lambda: abrir_bolsistas(self.root, on_bolsistas_changed))
         self.menu.add_command(label="Alunos / Servidores", command=lambda: abrir_alunos(self.root, lambda: (self._atualizar_lista(), self._focus_matricula())))
         self.menu.add_separator()
+        self.menu.add_command(label="Configurações",       command=self._abrir_configuracoes)
         self.menu.add_command(label="Sobre",               command=lambda: mostrar_sobre(self.root))
 
     def _abrir_menu(self):
@@ -674,11 +762,14 @@ class App:
 
     def _focus_matricula(self):
         """Retorna foco para entry_matricula com texto selecionado se houver."""
-        self.entry_matricula.focus()
-        mat = self._ph_matricula.get()
-        # Only select if it's actual input (not placeholder)
-        if mat and mat != "Matrícula":
-            self.entry_matricula.select_range(0, tk.END)
+        try:
+            self.entry_matricula.focus()
+            mat = self._ph_matricula.get()
+            # Only select if it's actual input (not placeholder)
+            if mat and mat != "Matrícula":
+                self.entry_matricula.select_range(0, tk.END)
+        except tk.TclError:
+            pass
 
     def _show_toast(self, message):
         toast = tk.Toplevel(self.root)
@@ -720,29 +811,114 @@ class App:
         self._focus_matricula()
         if event: return "break"
 
+    def _abrir_configuracoes(self):
+        """Abre o diálogo de configurações."""
+        t = TEMAS["default"]
+        bg, fg, field, select = t["bg"], t["fg"], t["field"], t["select"]
+        win = tk.Toplevel(self.root)
+        win.title("Configurações")
+        win.configure(bg=bg)
+        setup_dialog(win, self.root, min_width=450, min_height=250,
+                     resizable=(False, False), escape_close=True)
+
+        var_mapa = tk.IntVar(value=int(self.config.get("escolher_maquina_entrada", False)))
+
+        def forcar_backup():
+            msg = executar_backup_diario()
+            self.config["ultimo_backup"] = agora().strftime("%Y-%m-%d")
+            lbl_backup.config(text=f"Último backup: {self.config.get('ultimo_backup')}")
+            mostrar_toast(self.root, msg)
+
+        # Build grid
+        grid_frame = tk.Frame(win, bg=bg)
+        grid_frame.pack(fill="both", expand=True, padx=20, pady=15)
+        
+        # Row 1: Escolher Máquina
+        r1 = tk.Frame(grid_frame, bg=bg)
+        r1.pack(fill="x", pady=5)
+        tk.Label(r1, text="Escolher Máquina na Entrada", bg=bg, fg=fg, font=("Arial", 10), anchor="w").pack(side="left")
+        tk.Checkbutton(r1, variable=var_mapa, bd=0, highlightthickness=0, bg=bg, selectcolor=select, activebackground=bg).pack(side="right")
+        
+        # Separator
+        tk.Frame(grid_frame, bg="#444", height=1).pack(fill="x", pady=10)
+        
+        # Row 2: Exportações
+        r2 = tk.Frame(grid_frame, bg=bg)
+        r2.pack(fill="x", pady=5)
+        tk.Label(r2, text="Pasta de Exportações", bg=bg, fg=fg, font=("Arial", 10), anchor="w").pack(side="left")
+        tk.Button(r2, text="ABRIR", command=lambda: abrir_diretorio_so("exports"), bd=0, bg=field, fg=fg, padx=15, pady=4).pack(side="right")
+        
+        # Row 3: Backups
+        r3 = tk.Frame(grid_frame, bg=bg)
+        r3.pack(fill="x", pady=5)
+        tk.Label(r3, text="Pasta de Backups", bg=bg, fg=fg, font=("Arial", 10), anchor="w").pack(side="left")
+        tk.Button(r3, text="ABRIR", command=lambda: abrir_diretorio_so("backups"), bd=0, bg=field, fg=fg, padx=15, pady=4).pack(side="right")
+        
+        # Row 4: Gerar Backup
+        r4 = tk.Frame(grid_frame, bg=bg)
+        r4.pack(fill="x", pady=5)
+        ultimo_bkp = self.config.get("ultimo_backup", "")
+        if not ultimo_bkp: ultimo_bkp = "Nunca"
+        lbl_backup = tk.Label(r4, text=f"Último backup: {ultimo_bkp}", bg=bg, fg="#aaa", font=("Arial", 10), anchor="w")
+        lbl_backup.pack(side="left")
+        tk.Button(r4, text="GERAR AGORA", command=forcar_backup, bd=0, bg=field, fg=fg, padx=15, pady=4).pack(side="right")
+        
+        def salvar():
+            self.config["escolher_maquina_entrada"] = bool(var_mapa.get())
+            save_config(self.config)
+            win.destroy()
+
+        # Bottom Bar
+        bottom = tk.Frame(win, bg=bg)
+        bottom.pack(fill="x", pady=10)
+        tk.Button(bottom, text="Salvar", command=salvar, bd=0, highlightthickness=0,
+                  bg="#35383e", fg=fg, padx=25, pady=6, font=("Arial", 10, "bold")).pack()
+                  
+        win.bind("<Return>", lambda _: salvar())
+        win.bind("<KP_Enter>", lambda _: salvar())
+
     def _fluxo_entrada(self, matricula: str | None, nome: str) -> bool:
         """UI glue: chama o serviço de entrada e reage ao resultado."""
+        # Check for active session FIRST, before showing the map
+        if matricula:
+            rid_ativo = buscar_registro_ativo(matricula)
+            if rid_ativo:
+                resp = messagebox.askyesno(
+                    "Já dentro",
+                    f"{nome} já tem entrada ativa.\nRegistrar saída agora?",
+                    parent=self.root
+                )
+                if resp:
+                    finalizar_registro(rid_ativo, agora().strftime("%H:%M"))
+                    self._push_undo({"tipo": "saida", "rid": rid_ativo, "nome": nome})
+                    self.status(f"Saída de {nome} registrada.")
+                    self._atualizar_lista()
+                return False
+
+        # User is entering — determine machine: map dialog or combobox
+        if self.config.get("escolher_maquina_entrada"):
+            ocupadas = buscar_maquinas_ocupadas()
+            maquina_real = selecionar_maquina(self.root, ocupadas)
+            if maquina_real is None:
+                return False  # user cancelled
+                
+            # Mask UI combobox for display but retain internal ML-X
+            if maquina_real == "-":
+                self.combo_maquina.set("-")
+            else:
+                maq_exib = "ML" if str(maquina_real).startswith("ML-") else maquina_real
+                self.combo_maquina.set(maq_exib)
+        else:
+            maquina_real = self.combo_maquina.get()
+
         try:
             resultado = processar_entrada(
                 matricula, nome,
-                self.combo_maquina.get(), self.combo_bolsista.get(),
+                maquina_real, self.combo_bolsista.get(),
             )
         except Exception as e:
             log.error("Falha ao registrar entrada: %s", e)
             self.status("Erro ao registrar entrada.", erro=True)
-            return False
-
-        if resultado["status"] == "ja_ativo":
-            resp = messagebox.askyesno(
-                "Já dentro",
-                f"{nome} já tem entrada ativa.\nRegistrar saída agora?",
-                parent=self.root
-            )
-            if resp:
-                finalizar_registro(resultado["rid_ativo"], agora().strftime("%H:%M"))
-                self._push_undo({"tipo": "saida", "rid": resultado["rid_ativo"], "nome": nome})
-                self.status(f"Saída de {nome} registrada.")
-                self._atualizar_lista()
             return False
 
         # status == "entrada_registrada"
@@ -886,9 +1062,11 @@ class App:
             else:
                 tags = (str(rid), "other", str(i % 2))
 
+            maq_exib = "ML" if str(maquina).startswith("ML-") else (maquina or "-")
+
             self.tree.insert(
                 "", "end",
-                values=(nome, mat_exib, entrada, saida or "", tempo, maquina or "-"),
+                values=(nome, mat_exib, entrada, saida or "", tempo, maq_exib),
                 tags=tags,
             )
 
@@ -904,7 +1082,17 @@ class App:
         self._btns_filtro["Ativos"].config(text=f"Ativos ({ativos})")
 
     def _tick_relogio(self):
-        self.lbl_clock.config(text=agora().strftime("%H:%M"))
+        now = agora()
+        self.lbl_clock.config(text=now.strftime("%H:%M"))
+        
+        # Daily auto-backup check
+        if now.hour >= 17:
+            today_str = now.strftime("%Y-%m-%d")
+            if self.config.get("ultimo_backup") != today_str:
+                executar_backup_diario()
+                self.config["ultimo_backup"] = today_str
+                mostrar_toast(self.root, "Backup diário automático realizado!")
+
         self._relogio_job = self.root.after(1000, self._tick_relogio)
 
     # ── Tema ─────────────────────────────────
@@ -1153,7 +1341,7 @@ class App:
             return m
 
         dados_norm = [
-            (data, entrada, saida, nome, _fmt_matricula(mat), maquina, bolsista)
+            (data, entrada, saida, nome, _fmt_matricula(mat), "ML" if str(maquina).startswith("ML-") else maquina, bolsista)
             for data, entrada, saida, nome, mat, maquina, bolsista in dados
         ]
 
@@ -1162,8 +1350,8 @@ class App:
 
         # Determine month for folder name from the first record's date
         if dados:
-            primeira_data = dados[0][0]  # First record's date
-            mes_pasta = primeira_data.split("/")[1] + "-" + primeira_data.split("/")[0]  # MM-YYYY -> YYYY-MM
+            primeira_data = dados[0][0]  # First record's date (DD/MM/YYYY)
+            mes_pasta = primeira_data.split("/")[2] + "-" + primeira_data.split("/")[1]  # YYYY-MM
         else:
             mes_pasta = agora().strftime("%Y-%m")
 

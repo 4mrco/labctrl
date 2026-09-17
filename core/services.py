@@ -1,9 +1,12 @@
-import os
 import json
-from datetime import datetime, date, timedelta
+import os
+import shutil
+import glob
+import subprocess
 from collections import defaultdict
+from datetime import date, datetime, timedelta
 
-from core.config import CONFIG_FILE, EXPORT_DIR
+from core.config import CONFIG_FILE, EXPORT_DIR, DB_FILE, BASE_DIR
 
 
 # ─────────────────────────────────────────────
@@ -17,11 +20,19 @@ def _get_db():
 
 def load_config() -> dict:
     if not os.path.exists(CONFIG_FILE):
-        return {"exported_months": [], "ultimo_bolsista": None, "open_export_folder": True}
+        return {
+            "exported_months": [], "ultimo_bolsista": None, 
+            "open_export_folder": True, "escolher_maquina_entrada": False,
+            "ultimo_backup": "", "versao_registrada": "", "popup_expira_em": ""
+        }
     cfg = json.load(open(CONFIG_FILE, "r"))
     cfg.setdefault("exported_months", [])
     cfg.setdefault("ultimo_bolsista", None)
     cfg.setdefault("open_export_folder", True)
+    cfg.setdefault("escolher_maquina_entrada", False)
+    cfg.setdefault("ultimo_backup", "")
+    cfg.setdefault("versao_registrada", "")
+    cfg.setdefault("popup_expira_em", "")
     return cfg
 
 
@@ -114,7 +125,8 @@ def calcular_estatisticas(dados: list[tuple]) -> dict:
         chave = f"{nome} ({matricula})"
         visitas_por_pessoa[chave] += 1
         if maquina and maquina not in ("-", ""):
-            uso_maquinas[maquina] += 1
+            maq_exib = "ML" if str(maquina).startswith("ML-") else maquina
+            uso_maquinas[maq_exib] += 1
         if entrada:
             try:
                 horas_entrada[int(entrada.split(":")[0])] += 1
@@ -147,6 +159,56 @@ def calcular_estatisticas(dados: list[tuple]) -> dict:
             if horas_entrada else "-"
         ),
     }
+
+
+# ─────────────────────────────────────────────
+# SERVIÇO: BACKUP & SISTEMA
+# ─────────────────────────────────────────────
+
+def executar_backup_diario(db_path=None, max_backups=5) -> str:
+    """Creates a timestamped backup directory and keeps only max_backups."""
+    if db_path is None:
+        db_path = DB_FILE
+        
+    backup_dir = os.path.join(BASE_DIR, "backups")
+    os.makedirs(backup_dir, exist_ok=True)
+    
+    now = agora()
+    today_str = now.strftime("%Y-%m-%d")
+    timestamp_str = now.strftime("%Y-%m-%d_%H%M")
+    
+    # Create specific backup folder
+    specific_backup_dir = os.path.join(backup_dir, timestamp_str)
+    os.makedirs(specific_backup_dir, exist_ok=True)
+    
+    if os.path.exists(db_path):
+        shutil.copy2(db_path, os.path.join(specific_backup_dir, "lab.db"))
+        
+    # Rotate backups (directories only)
+    all_dirs = [os.path.join(backup_dir, d) for d in os.listdir(backup_dir)]
+    backups = sorted([d for d in all_dirs if os.path.isdir(d)], key=os.path.getmtime)
+    
+    while len(backups) > max_backups:
+        shutil.rmtree(backups.pop(0))
+        
+    # Update config
+    cfg = load_config()
+    cfg["ultimo_backup"] = today_str
+    save_config(cfg)
+    
+    return f"Backup realizado com sucesso: {timestamp_str}"
+
+def abrir_diretorio_so(caminho_relativo: str):
+    """Opens a directory in the host OS file explorer."""
+    abs_path = os.path.join(BASE_DIR, caminho_relativo)
+    os.makedirs(abs_path, exist_ok=True)
+    try:
+        if os.name == 'nt':
+            os.startfile(abs_path)
+        else:
+            subprocess.Popen(['xdg-open', abs_path])
+    except Exception as e:
+        print(f"Erro ao abrir {caminho_relativo}: {e}")
 
 
 # ─────────────────────────────────────────────
@@ -225,9 +287,10 @@ def reverter_acao(acao: dict) -> str:
     elif tipo == "edicao":
         # desfaz: restaura valores anteriores
         c = acao["antes"]
-        db.atualizar_registro(c["id"], c["data"], c["entrada"],
+        db.atualizar_registro(c["id"], c["nome"], c["data"], c["entrada"],
                               c["saida"] or "", c["maquina"] or "")
-        db.atualizar_aluno(c["matricula"], c["nome"])
+        if c.get("matricula"):
+            db.atualizar_aluno(c["matricula"], c["nome"])
         return f"Edição de {acao['nome']} desfeita."
 
     raise ValueError(f"Tipo de undo desconhecido: {tipo!r}")
