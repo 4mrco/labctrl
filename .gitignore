@@ -11,4 +11,5 @@ profile.txt
 .claude/
 apptst.py
 config.json
+.agents/
 PROJECT_STATE.md
