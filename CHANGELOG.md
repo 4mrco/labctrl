@@ -8,7 +8,7 @@
 - A funcionalidade pode ser ativada ou desativada pelo menu **Configurações → Escolher Máquina na Entrada**.
 
 ### Backups Automáticos Diários 💾
-- O sistema agora realiza backup automático do banco de dados todo dia. **(Para evitar incidentes de pastas home sendo apagadas do nada...)**
+- O sistema agora realiza backup automático do banco de dados todo dia. **(Futuramente para um local seguro, para evitar incidentes de pastas home sendo apagadas do nada...)**
 - São mantidas as últimas **5 cópias** automaticamente. Cópias mais antigas são removidas sem intervenção manual.
 - Se o sistema ficar um dia ou mais sem abrir, o backup atrasado é realizado automaticamente na próxima inicialização.
 - O backup pode ser forçado manualmente pelo painel de **Configurações → Gerar Agora**. 
