@@ -476,21 +476,9 @@ class App:
         self.menu.add_command(label="Editar selecionado",  command=self._editar_registro)
         self.menu.add_command(label="Remover selecionado", command=self._remover_registro)
         self.menu.add_separator()
-
-        export_menu = tk.Menu(self.menu, tearoff=0)
-        export_menu.add_command(label="Dia",    command=self._exportar_dia)
-        export_menu.add_command(label="Ontem",  command=self._exportar_ontem)
-        export_menu.add_command(label="Semana", command=self._exportar_semana)
-        export_menu.add_command(label="Mês",    command=self._exportar_mes)
-        self.menu.add_cascade(label="Exportar", menu=export_menu)
-        
-
-        copiar_menu = tk.Menu(self.menu, tearoff=0)
-        copiar_menu.add_command(label="Hoje",        command=lambda: copiar_periodo(self.root, "Hoje", self._mes_ativo()))
-        copiar_menu.add_command(label="Ontem",       command=lambda: copiar_periodo(self.root, "Ontem", self._mes_ativo()))
-        copiar_menu.add_command(label="Semana",      command=lambda: copiar_periodo(self.root, "Semana", self._mes_ativo()))
-        copiar_menu.add_command(label="Mês",         command=lambda: copiar_periodo(self.root, "Mês", self._mes_ativo()))
-        self.menu.add_cascade(label="Copiar Dados", menu=copiar_menu)
+        from ui.dialogs import abrir_janela_exportar
+        self.menu.add_command(label="Exportar Dados...", 
+                              command=lambda: abrir_janela_exportar(self.root, self._mes_ativo(), self._handle_export_action))
         self.menu.add_separator()
         
         self.menu.add_command(label="Visualizar DB", command=lambda: visualizar_db(self.root))
@@ -731,14 +719,23 @@ class App:
         if not reg_items:
             return
 
-        # Confirmation for multiple records
+        # Confirmation for multiple records or if config asks for it
         if len(reg_items) > 1:
+            # multiple always ask
             if not messagebox.askyesno(
                 "Confirmar Saída",
                 f"Tem certeza que deseja registrar saída para {len(reg_items)} aluno(s)?",
                 parent=self.root
             ):
                 return
+        elif len(reg_items) == 1:
+            if self.config.get("confirmar_saida", True):
+                if not messagebox.askyesno(
+                    "Confirmar Saída",
+                    f"Tem certeza que deseja registrar saída selecionada?",
+                    parent=self.root
+                ):
+                    return
 
         # Perform all operations
         self._registrar_saida_batch(reg_items)
@@ -874,6 +871,13 @@ class App:
         tk.Label(r1, text="Escolher Máquina na Entrada", bg=bg, fg=fg, font=("Arial", 10), anchor="w").pack(side="left")
         tk.Checkbutton(r1, variable=var_mapa, bd=0, highlightthickness=0, bg=bg, selectcolor=select, activebackground=bg).pack(side="right")
         
+        # Row 1b: Confirmar Saída
+        var_confirma = tk.BooleanVar(value=bool(self.config.get("confirmar_saida", True)))
+        r1b = tk.Frame(grid_frame, bg=bg)
+        r1b.pack(fill="x", pady=5)
+        tk.Label(r1b, text="Confirmar saída de usuário (popup)", bg=bg, fg=fg, font=("Arial", 10), anchor="w").pack(side="left")
+        tk.Checkbutton(r1b, variable=var_confirma, bd=0, highlightthickness=0, bg=bg, selectcolor=select, activebackground=bg).pack(side="right")
+        
         # Separator
         tk.Frame(grid_frame, bg="#444", height=1).pack(fill="x", pady=10)
         
@@ -900,6 +904,7 @@ class App:
         
         def salvar():
             self.config["escolher_maquina_entrada"] = bool(var_mapa.get())
+            self.config["confirmar_saida"] = var_confirma.get()
             save_config(self.config)
             win.destroy()
 
@@ -918,11 +923,15 @@ class App:
         if matricula:
             rid_ativo = buscar_registro_ativo(matricula)
             if rid_ativo:
-                resp = messagebox.askyesno(
-                    "Já dentro",
-                    f"{nome} já tem entrada ativa.\nRegistrar saída agora?",
-                    parent=self.root
-                )
+                if self.config.get("confirmar_saida", True):
+                    resp = messagebox.askyesno(
+                        "Já dentro",
+                        f"{nome} já tem entrada ativa.\nRegistrar saída agora?",
+                        parent=self.root
+                    )
+                else:
+                    resp = True
+
                 if resp:
                     finalizar_registro(rid_ativo, agora().strftime("%H:%M"))
                     self._push_undo({"tipo": "saida", "rid": rid_ativo, "nome": nome})
@@ -1397,18 +1406,47 @@ class App:
                 w = csv.writer(f)
                 w.writerow([f"Relatório do Laboratório — {titulo}"])
                 w.writerow([
-                    f"Total de visitas: {stats['total_visitas']}",
-                    f"Pessoas distintas: {stats['total_pessoas']}",
-                    f"Máquina mais usada: {stats['maquina_mais_usada']}",
-                    f"Horário de pico: {stats['horario_pico']}",
+                    f"Total de visitas: {stats.get('total_visitas', 0)}",
+                    f"Pessoas distintas: {stats.get('total_pessoas', 0)}",
+                    f"Tempo total: {stats.get('tempo_total', '-')}",
+                    f"Horário de pico: {stats.get('horario_pico', '-')}",
+                    f"Dia mais movim.: {stats.get('dia_pico', '-')}",
+                    f"Top 3 máquinas: {stats.get('top3_maquinas', '-')}",
                 ])
                 w.writerow([])
-                w.writerow(["Resumo por pessoa"])
-                w.writerow(["Nome (Matrícula)", "Visitas", "Tempo total"])
-                for pessoa, visitas in stats["visitas_por_pessoa"]:
-                    tempo = stats["horas_por_pessoa"].get(pessoa, "-")
-                    w.writerow([pessoa, visitas, tempo])
-                w.writerow([])
+                w.writerow(["Resumo por pessoa (blocos de 10)"])
+
+                def _write_blocks(writer, chunk_of_50):
+                    # split chunk into up to 5 columns of 10
+                    cols = [chunk_of_50[i:i+10] for i in range(0, len(chunk_of_50), 10)]
+                    header = []
+                    for c in cols:
+                        if c:
+                            header.extend(["Nome (Matrícula)", "Visitas", "Tempo total", ""])
+                    writer.writerow(header)
+                    
+                    for row_idx in range(10):
+                        row_data = []
+                        has_data = False
+                        for c in cols:
+                            if c:
+                                if row_idx < len(c):
+                                    pessoa, visitas = c[row_idx]
+                                    tempo = stats.get("horas_por_pessoa", {}).get(pessoa, "-")
+                                    row_data.extend([pessoa, visitas, tempo, ""])
+                                    has_data = True
+                                else:
+                                    row_data.extend(["", "", "", ""])
+                        if has_data:
+                            writer.writerow(row_data)
+                    writer.writerow([])
+
+                pessoas = stats.get("visitas_por_pessoa", [])
+                for i in range(0, len(pessoas), 50):
+                    _write_blocks(w, pessoas[i:i+50])
+
+                if not pessoas:
+                    w.writerow([])
                 w.writerow(["Registros detalhados"])
                 w.writerow(["Data", "Entrada", "Saída", "Nome",
                             "Matrícula", "Máquina(Nº)", "Bolsista presente"])
@@ -1449,42 +1487,50 @@ class App:
         tk.Button(btn_frame, text="OK", command=info_win.destroy,
                   bg="#35383e", fg=t["fg"], bd=0, highlightthickness=0).pack(side="left", padx=5)
 
-    def _exportar_dia(self):
-        dia = agora().strftime("%d/%m/%Y")
-        self._fazer_export(
-            buscar_export_dia(dia),
-            label=dia.replace("/", "_"),
-            titulo=f"Dia {dia}",
-        )
+    def _handle_export_action(self, modo: str, periodo: str, mes_str: str = None):
+        """Callback da janela unificada de exportação/cópia."""
+        if periodo == "Hoje":
+            dia = agora().strftime("%d/%m/%Y")
+            dados = buscar_export_dia(dia)
+            label = dia.replace("/", "_")
+            titulo = f"Dia {dia}"
+            marcar_mes = None
+        elif periodo == "Ontem":
+            dados, lbl_ontem = buscar_export_ontem()
+            label = lbl_ontem.replace("/", "_")
+            titulo = f"Dia {lbl_ontem}"
+            marcar_mes = None
+        elif periodo == "Semana":
+            datas = datas_semana_atual()
+            dados = buscar_export_semana(datas)
+            label = f"semana_{datas[0].replace('/','')[:4]}_{datas[-1].replace('/','')[2:]}"
+            titulo = f"Semana {datas[0][:5]} a {datas[-1][:5]}"
+            marcar_mes = None
+        elif periodo == "Mês":
+            if not mes_str:
+                self.status("Mês inválido selecionado.", erro=True)
+                return
+            dados = buscar_export_mes(mes_str)
+            label = mes_str.replace("/", "_")
+            titulo = f"Mês {mes_str}"
+            marcar_mes = mes_str
+        else:
+            return
 
-    def _exportar_ontem(self):
-        dados, ontem = buscar_export_ontem()
-        self._fazer_export(
-            dados,
-            label=ontem.replace("/", "_"),
-            titulo=f"Dia {ontem}",
-        )
-
-    def _exportar_semana(self):
-        datas   = datas_semana_atual()
-        hoje    = date.today()
-        segunda = hoje - timedelta(days=hoje.weekday())
-        domingo = segunda + timedelta(days=6)
-        self._fazer_export(
-            buscar_export_semana(datas),
-            label=f"semana_{segunda.strftime('%d%m')}_{domingo.strftime('%d%m_%Y')}",
-            titulo=f"Semana {segunda.strftime('%d/%m')} – {domingo.strftime('%d/%m/%Y')}",
-        )
-
-    def _exportar_mes(self, mes: str | None = None):
-        if mes is None:
-            mes = self._mes_ativo()
-        self._fazer_export(
-            buscar_export_mes(mes),
-            label=mes.replace("/", "_"),
-            titulo=f"Mês {mes}",
-            marcar_mes=mes,
-        )
+        if modo == "exportar":
+            self._fazer_export(dados, label, titulo, marcar_mes)
+        elif modo == "copiar":
+            if dados:
+                linhas = []
+                for data, entrada, saida, nome, matricula, maquina, bolsista in dados:
+                    mat_fmt = "" if not matricula or matricula == "SERVIDOR" else matricula
+                    maq_exib = "ML" if str(maquina).startswith("ML-") else maquina
+                    linhas.append(f"{data}\t{entrada}\t{saida or ''}\t{nome}\t{mat_fmt}\t{maq_exib or ''}\t{bolsista or ''}")
+                texto = "\n".join(linhas)
+                self.root.clipboard_clear()
+                self.root.clipboard_append(texto)
+                from tkinter import messagebox
+                messagebox.showinfo("Copiar Dados", "Copiado para a área de transferência", parent=self.root)
 
     # ── Copiar Dados ───────────────────────────────
 
