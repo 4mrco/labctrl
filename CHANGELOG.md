@@ -23,3 +23,19 @@
 - Corrigido o formato das pastas de exportação (agora seguem o padrão `Ano-Mês`, ex.: `2026-09`).
 - Corrigido o posicionamento dos ícones das máquinas no mapa (alinhados corretamente dentro das mesas).
 - Melhorias de estabilidade geral: o sistema não fecha mais inesperadamente em situações específicas de registro.
+
+## Versão 1.2 — 20/09/2026
+
+### Exportação e Relatórios Otimizados
+- **Nova Janela de Exportação:** Os submenus de exportação foram substituídos por uma janela unificada. Agora é possível escolher o período (Hoje, Ontem, Semana, Mês) e visualizar as opções de exportar para CSV ou copiar para a área de transferência no mesmo lugar.
+- **CSV Compacto:** O arquivo exportado foi reestruturado para ser mais denso e legível. O ranking de usuários agora é agrupado em blocos dispostos lado a lado.
+- **Ajustes de Estatísticas:** Máquinas do tipo "Mesa Livre" (ML) foram removidas do Top 3 de uso, e o relatório passou a exibir o "Dia mais movimentado".
+
+### Visualização de Dados e Navegação
+- **Média de Visitas/Dia:** No painel Visualizar DB, o indicador acumulado de "Tempo Total" foi substituído pela "Média de Visitas/Dia", entregando uma métrica mais precisa sobre a taxa de ocupação diária do laboratório.
+- **Seletor de Meses Hierárquico:** O menu de histórico na tela principal agora agrupa os meses dentro de seus respectivos anos (ex: 2026 → Setembro). O Visualizar DB também recebeu seletores independentes para Ano e Mês.
+- **Correção de Foco no Linux:** Resolução de um problema crônico onde menus suspensos (meses e opções) e notificações flutuantes ficavam presos na tela sobrepondo outros aplicativos no sistema operacional.
+
+### Configurações e Operação
+- **Saída Expressa:** Adicionada uma nova preferência no menu de Configurações para desativar o aviso "Tem certeza que deseja registrar a saída?". Quando desativado, o registro de saída via teclado ou clique se torna imediato.
+- **Instruções no Mapa:** Adicionado um texto auxiliar discreto no mapa interativo orientando sobre o uso das teclas numéricas e das letras "M" e "L" para seleção rápida de máquinas.
