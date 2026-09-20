@@ -137,6 +137,11 @@ class App:
         self.root.bind_all("<Control-z>", self._desfazer)
         self.root.bind_all("<Control-Z>", self._desfazer)
         self.root.bind_all("<Control-Key-z>", self._desfazer)
+        
+        # Track active popup to fix Linux WM dangling menus
+        self._active_popup = None
+        self.root.bind("<FocusOut>", self._on_focus_out, add="+")
+        
         self.root.after(500, self._verificar_export_pendente)
         self.root.after(800, self._verificar_orfaos)
         
@@ -153,6 +158,16 @@ class App:
         
         # Show patch notes popup if new version or within 3-day window
         self.root.after(1200, self._verificar_novidades)
+
+    def _on_focus_out(self, event):
+        """Forcefully unpost menus when the app loses focus to fix Linux WM quirks."""
+        if getattr(self, '_active_popup', None):
+            try:
+                # If no widget in our app has focus, the app itself lost focus
+                if not self.root.focus_get():
+                    self._active_popup.unpost()
+            except Exception:
+                pass
 
     # ── Version / Patch Notes ─────────────────
 
@@ -493,6 +508,7 @@ class App:
 
     def _abrir_menu(self):
         """Open the menu using the button's screen position."""
+        self._active_popup = self.menu
         self.menu.tk_popup(self.btn_menu.winfo_rootx(), self.btn_menu.winfo_rooty() + 20)
         self.root.after_idle(self.menu.grab_release)
 
@@ -583,13 +599,35 @@ class App:
         return agora().strftime("%m/%Y")
 
     def _populate_month_menu(self, meses):
-        """Populate the month selection menu."""
+        """Populate the month selection menu with year-grouped submenus."""
+        from collections import OrderedDict
         self._month_menu.delete(0, tk.END)
+
+        # Group: {"2026": ["Setembro 2026", "Agosto 2026", ...], ...}
+        groups = OrderedDict()
         for m in meses:
-            self._month_menu.add_command(label=m, command=lambda sel=m: self._select_month(sel))
+            year = m.split()[-1]
+            groups.setdefault(year, []).append(m)
+
+        current = getattr(self, '_current_month_key', '')
+        t = TEMAS["default"]
+
+        for year, months in groups.items():
+            sub = tk.Menu(self._month_menu, tearoff=0,
+                          bg=t["field"], fg=t["fg"],
+                          activebackground=t["select"], activeforeground=t["fg"])
+            for month_name in months:
+                label = month_name.split()[0]  # "Setembro"
+                prefix = "✓ " if month_name == current else "   "
+                sub.add_command(
+                    label=f"{prefix}{label}",
+                    command=lambda sel=month_name: self._select_month(sel))
+            self._month_menu.add_cascade(label=year, menu=sub)
 
     def _show_month_menu(self):
-        """Display the month selection menu."""
+        """Display the month selection menu (rebuilt each time for checkmark accuracy)."""
+        self._populate_month_menu(self._meses_formatados())
+        self._active_popup = self._month_menu
         self._month_menu.tk_popup(self._month_dropdown_btn.winfo_rootx(),
                                    self._month_dropdown_btn.winfo_rooty() + 20)
         self.root.after_idle(self._month_menu.grab_release)

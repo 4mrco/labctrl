@@ -413,15 +413,49 @@ def visualizar_db(parent):
         tk.Label(card, text=titulo, font=("Arial", 9), fg=muted, bg=bg).pack()
         tk.Label(card, textvariable=var, font=("Arial", 14, "bold"), fg=fg, bg=bg).pack()
 
-    # ── MIDDLE: Controls (Month Combobox + Search) ───────────────
+    # ── MIDDLE: Controls (Year + Month Comboboxes + Search) ────────
     control_frame = tk.Frame(win, bg=bg)
     control_frame.pack(fill="x", padx=10, pady=(0, 8))
 
-    meses = buscar_meses()
-    var_mes = tk.StringVar(value=meses[0] if meses else "")
-    combo_mes = ttk.Combobox(control_frame, textvariable=var_mes,
-                              values=meses, width=12, state="readonly")
-    combo_mes.pack(side="left")
+    meses_raw = buscar_meses()  # ["09/2026", "08/2026", ...]
+    nomes_mes = {"01": "Janeiro", "02": "Fevereiro", "03": "Março", "04": "Abril",
+                 "05": "Maio", "06": "Junho", "07": "Julho", "08": "Agosto",
+                 "09": "Setembro", "10": "Outubro", "11": "Novembro", "12": "Dezembro"}
+    nomes_mes_rev = {v: k for k, v in nomes_mes.items()}
+
+    # Group months by year: {"2026": ["09", "08", ...], ...}
+    from collections import OrderedDict
+    anos_map = OrderedDict()
+    for m in meses_raw:
+        mm, yyyy = m.split("/")
+        anos_map.setdefault(yyyy, []).append(mm)
+    anos = list(anos_map.keys())
+
+    # Year combobox
+    tk.Label(control_frame, text="Ano:", bg=bg, fg=fg, font=("Segoe UI", 9)).pack(side="left", padx=(0, 4))
+    var_ano = tk.StringVar(value=anos[0] if anos else "")
+    combo_ano = ttk.Combobox(control_frame, textvariable=var_ano,
+                              values=anos, width=6, state="readonly")
+    combo_ano.pack(side="left")
+
+    # Month combobox (dependent on year)
+    tk.Label(control_frame, text="Mês:", bg=bg, fg=fg, font=("Segoe UI", 9)).pack(side="left", padx=(10, 4))
+    var_mes_nome = tk.StringVar()
+    combo_mes_nome = ttk.Combobox(control_frame, textvariable=var_mes_nome,
+                                   width=12, state="readonly")
+    combo_mes_nome.pack(side="left")
+
+    def _repopular_meses(*_):
+        """Repopulate month combobox when year changes, then refresh."""
+        y = var_ano.get()
+        month_nums = anos_map.get(y, [])
+        month_names = [nomes_mes[n] for n in month_nums]
+        combo_mes_nome["values"] = month_names
+        if month_names:
+            combo_mes_nome.set(month_names[0])
+        atualizar_tela()
+
+    combo_ano.bind("<<ComboboxSelected>>", _repopular_meses)
 
     tk.Label(control_frame, text="🔍", bg=bg, fg=fg).pack(side="right", padx=(8, 0))
     var_busca = tk.StringVar()
@@ -448,7 +482,7 @@ def visualizar_db(parent):
 
     # ── Load all month data once ─────────────────────────────────
     todos: dict[str, list[tuple]] = {}
-    for mes in meses:
+    for mes in meses_raw:
         dados = buscar_registros_por_mes(mes)
         todos[mes] = []
         for r in dados:
@@ -471,7 +505,10 @@ def visualizar_db(parent):
 
     # ── Unified update function ──────────────────────────────────
     def atualizar_tela(*_):
-        mes_atual = var_mes.get()
+        ano = var_ano.get()
+        mes_nome = var_mes_nome.get()
+        mes_num = nomes_mes_rev.get(mes_nome, "")
+        mes_atual = f"{mes_num}/{ano}" if mes_num and ano else ""
         if not mes_atual or mes_atual not in todos:
             return
         termo = var_busca.get().lower()
@@ -511,9 +548,9 @@ def visualizar_db(parent):
         var_tempo.set(_fmt_mins(total_mins) if valid_exits else "-")
         var_media.set(_fmt_mins(media_mins) if valid_exits else "-")
 
-    combo_mes.bind("<<ComboboxSelected>>", atualizar_tela)
+    combo_mes_nome.bind("<<ComboboxSelected>>", atualizar_tela)
     var_busca.trace_add("write", atualizar_tela)
-    atualizar_tela()
+    _repopular_meses()  # Initial population + first render
 
 
 
