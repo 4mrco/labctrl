@@ -48,7 +48,6 @@ class DialogoSelecaoMapa(tk.Toplevel):
         self.configure(bg=BG)
         self.resizable(False, False)
         self.transient(parent)
-        self.grab_set()
 
         self.result: str | None = None
         self._ocupadas = ocupadas
@@ -88,6 +87,7 @@ class DialogoSelecaoMapa(tk.Toplevel):
         def on_enter(e):
             self._tooltip = tk.Toplevel(self)
             self._tooltip.overrideredirect(True)
+            self._tooltip.transient(self)
             self._tooltip.geometry(f"+{e.x_root + 15}+{e.y_root + 10}")
             tk.Label(
                 self._tooltip,
@@ -101,8 +101,14 @@ class DialogoSelecaoMapa(tk.Toplevel):
                 self._tooltip.destroy()
                 self._tooltip = None
 
+        def _cleanup_tooltip(e=None):
+            if self._tooltip:
+                self._tooltip.destroy()
+                self._tooltip = None
+
         lbl_info.bind("<Enter>", on_enter)
         lbl_info.bind("<Leave>", on_leave)
+        self.bind("<Destroy>", _cleanup_tooltip, add="+")
                  
         tk.Button(bottom, text="Definir depois", command=self._sem_maquina,
                   bd=0, highlightthickness=0, bg=FIELD, fg=FG,
@@ -110,12 +116,16 @@ class DialogoSelecaoMapa(tk.Toplevel):
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        # Center on parent
+        # Center on parent, then grab
         self.update_idletasks()
         px, py = parent.winfo_rootx(), parent.winfo_rooty()
         pw, ph = parent.winfo_width(), parent.winfo_height()
         wx, wh = self.winfo_width(), self.winfo_height()
         self.geometry(f"+{px + (pw - wx) // 2}+{py + (ph - wh) // 2}")
+        try:
+            self.grab_set()
+        except tk.TclError:
+            pass
 
     # ── Drawing ───────────────────────────────────────────────────
 
