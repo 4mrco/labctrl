@@ -974,7 +974,113 @@ def abrir_form_edicao(parent, rid: int, on_success_callback=None):
     win.bind("<Return>", lambda _: salvar())
     win.bind("<KP_Enter>", lambda _: salvar())
 
+# ── Nova Janela Unificada Exportar / Copiar ──────────────
 
+def abrir_janela_exportar(parent, mes_ativo_default: str, callback_acao):
+    """Abre janela unificada para Exportar (CSV) ou Copiar Dados."""
+    t = TEMAS["default"]
+    bg, fg, field = t["bg"], t["fg"], t["field"]
+    titulo = "Exportar / Copiar Dados"
+    
+    win = tk.Toplevel(parent)
+    win.title(titulo)
+    win.configure(bg=bg)
+    setup_dialog(win, parent, min_width=380, min_height=260,
+                 resizable=(False, False), escape_close=True)
+
+    tk.Label(win, text="Selecione o período desejado:",
+             bg=bg, fg=fg, font=("Segoe UI", 11, "bold")).pack(pady=(16, 10))
+
+    var_periodo = tk.StringVar(value="Hoje")
+    frame_radios = tk.Frame(win, bg=bg)
+    frame_radios.pack(pady=5)
+
+    # Reusing months logic
+    meses_raw = buscar_meses()
+    nomes_mes = {"01": "Janeiro", "02": "Fevereiro", "03": "Março", "04": "Abril",
+                 "05": "Maio", "06": "Junho", "07": "Julho", "08": "Agosto",
+                 "09": "Setembro", "10": "Outubro", "11": "Novembro", "12": "Dezembro"}
+    nomes_mes_rev = {v: k for k, v in nomes_mes.items()}
+    
+    from collections import OrderedDict
+    anos_map = OrderedDict()
+    for m in meses_raw:
+        mm, yyyy = m.split("/")
+        anos_map.setdefault(yyyy, []).append(mm)
+    anos = list(anos_map.keys())
+
+    frame_mes = tk.Frame(win, bg=bg)
+    
+    # Year combobox
+    tk.Label(frame_mes, text="Ano:", bg=bg, fg=fg, font=("Segoe UI", 9)).pack(side="left", padx=(0, 4))
+    var_ano = tk.StringVar()
+    combo_ano = ttk.Combobox(frame_mes, textvariable=var_ano, values=anos, width=6, state="readonly")
+    combo_ano.pack(side="left")
+
+    # Month combobox
+    tk.Label(frame_mes, text="Mês:", bg=bg, fg=fg, font=("Segoe UI", 9)).pack(side="left", padx=(10, 4))
+    var_mes_nome = tk.StringVar()
+    combo_mes_nome = ttk.Combobox(frame_mes, textvariable=var_mes_nome, width=12, state="readonly")
+    combo_mes_nome.pack(side="left")
+
+    def _repopular_meses(*_):
+        y = var_ano.get()
+        month_nums = anos_map.get(y, [])
+        month_names = [nomes_mes[n] for n in month_nums]
+        combo_mes_nome["values"] = month_names
+        if month_names:
+            combo_mes_nome.set(month_names[0])
+            
+    combo_ano.bind("<<ComboboxSelected>>", _repopular_meses)
+
+    # Initialize combos to mes_ativo_default if possible
+    if mes_ativo_default:
+        mm_def, yyyy_def = mes_ativo_default.split("/")
+        if yyyy_def in anos_map:
+            var_ano.set(yyyy_def)
+            _repopular_meses()
+            nome_def = nomes_mes.get(mm_def)
+            if nome_def in combo_mes_nome["values"]:
+                var_mes_nome.set(nome_def)
+    elif anos:
+        var_ano.set(anos[0])
+        _repopular_meses()
+
+    def _update_ui(*_):
+        if var_periodo.get() == "Mês":
+            frame_mes.pack(pady=10)
+        else:
+            frame_mes.pack_forget()
+
+    for p in ["Hoje", "Ontem", "Semana", "Mês"]:
+        tk.Radiobutton(frame_radios, text=p, variable=var_periodo, value=p,
+                       bg=bg, fg=fg, selectcolor=field, activebackground=bg, bd=0, highlightthickness=0,
+                       activeforeground=fg, command=_update_ui).pack(side="left", padx=5)
+                       
+    _update_ui()
+
+    def _executar(modo: str):
+        periodo = var_periodo.get()
+        mes_str = None
+        if periodo == "Mês":
+            ano = var_ano.get()
+            mes_nome = var_mes_nome.get()
+            mes_num = nomes_mes_rev.get(mes_nome, "")
+            mes_str = f"{mes_num}/{ano}" if mes_num and ano else ""
+        
+        callback_acao(modo, periodo, mes_str)
+        win.destroy()
+
+    btn_frame = tk.Frame(win, bg=bg)
+    btn_frame.pack(pady=(15, 10))
+    
+    tk.Button(btn_frame, text="Exportar arquivo CSV", command=lambda: _executar("exportar"),
+              bd=0, highlightthickness=0, bg="#35383e", fg=fg,
+              padx=15, pady=6, font=("Segoe UI", 9, "bold")).pack(side="left", padx=5)
+              
+    tk.Button(btn_frame, text="Copiar p. área de transf.", command=lambda: _executar("copiar"),
+              bd=0, highlightthickness=0, bg="#35383e", fg=fg,
+              padx=15, pady=6, font=("Segoe UI", 9, "bold")).pack(side="left", padx=5)
 
 
 

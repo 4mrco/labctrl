@@ -33,6 +33,7 @@ def load_config() -> dict:
     cfg.setdefault("ultimo_backup", "")
     cfg.setdefault("versao_registrada", "")
     cfg.setdefault("popup_expira_em", "")
+    cfg.setdefault("confirmar_saida", True)
     return cfg
 
 
@@ -120,18 +121,26 @@ def calcular_estatisticas(dados: list[tuple]) -> dict:
     visitas_por_pessoa: dict[str, int] = defaultdict(int)
     uso_maquinas:       dict[str, int] = defaultdict(int)
     horas_entrada:      dict[int, int]  = defaultdict(int)
+    visitas_por_dia:    dict[str, int] = defaultdict(int)
 
     for data, entrada, saida, nome, matricula, maquina, _ in dados:
         chave = f"{nome} ({matricula})"
         visitas_por_pessoa[chave] += 1
+        
+        if data:
+            visitas_por_dia[data] += 1
+
         if maquina and maquina not in ("-", ""):
             maq_exib = "ML" if str(maquina).startswith("ML-") else maquina
+            # We track all machines, but we will exclude ML/ML-X from the top 3 later
             uso_maquinas[maq_exib] += 1
+            
         if entrada:
             try:
                 horas_entrada[int(entrada.split(":")[0])] += 1
             except Exception:
                 pass
+                
         if saida and entrada and data:
             try:
                 fmt = "%d/%m/%Y %H:%M"
@@ -143,17 +152,25 @@ def calcular_estatisticas(dados: list[tuple]) -> dict:
             except Exception:
                 pass
 
+    total_minutos = sum(minutos_por_pessoa.values())
+    tempo_total_formatado = f"{total_minutos // 60}h{total_minutos % 60:02}m"
+
+    # Top 3 machines (excluding ML and ML-X)
+    maquinas_validas = {k: v for k, v in uso_maquinas.items() if not k.startswith("ML")}
+    top3 = sorted(maquinas_validas.items(), key=lambda x: -x[1])[:3]
+    top3_maquinas = ", ".join(f"{k} ({v})" for k, v in top3) if top3 else "-"
+
     return {
         "total_visitas":      sum(visitas_por_pessoa.values()),
         "total_pessoas":      len(visitas_por_pessoa),
+        "tempo_total":        tempo_total_formatado,
+        "dia_pico":           max(visitas_por_dia, key=visitas_por_dia.get) if visitas_por_dia else "-",
+        "top3_maquinas":      top3_maquinas,
         "visitas_por_pessoa": sorted(visitas_por_pessoa.items(), key=lambda x: -x[1]),
         "horas_por_pessoa": {
             k: f"{v // 60}h{v % 60:02}m"
             for k, v in sorted(minutos_por_pessoa.items(), key=lambda x: -x[1])
         },
-        "maquina_mais_usada": (
-            max(uso_maquinas, key=uso_maquinas.get) if uso_maquinas else "-"
-        ),
         "horario_pico": (
             f"{max(horas_entrada, key=horas_entrada.get):02}:00"
             if horas_entrada else "-"
