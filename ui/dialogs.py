@@ -405,7 +405,7 @@ def visualizar_db(parent):
     for titulo, var in [
         ("Total de Visitas",   var_visitas),
         ("Pessoas Únicas",     var_pessoas),
-        ("Tempo Total",        var_tempo),
+        ("Média de Visitas/Dia", var_tempo),
         ("Permanência Média",  var_media),
     ]:
         card = tk.Frame(dash_frame, bg=bg)
@@ -545,7 +545,14 @@ def visualizar_db(parent):
 
         var_visitas.set(str(visitas))
         var_pessoas.set(str(pessoas))
-        var_tempo.set(_fmt_mins(total_mins) if valid_exits else "-")
+        
+        dias_distintos = len({row[2] for row in rows if row[2]})
+        if dias_distintos > 0:
+            media = visitas / dias_distintos
+            var_tempo.set(f"{media:.1f}".replace(".", ","))
+        else:
+            var_tempo.set("-")
+            
         var_media.set(_fmt_mins(media_mins) if valid_exits else "-")
 
     combo_mes_nome.bind("<<ComboboxSelected>>", atualizar_tela)
