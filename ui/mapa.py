@@ -136,6 +136,13 @@ class DialogoSelecaoMapa(tk.Toplevel):
         c.create_rectangle(460, 20, 580, 60, fill=DESK_CLR, outline="#555", width=1)
         self._draw_bolsista(c, 540, 40)
 
+        # ── Shortcuts Helper Text (top-left) ─
+        c.create_text(
+            60, 20,
+            text="Selecione para a respectiva máquina\nPressione o número no teclado\nPressione M ou L para mesa livre",
+            fill="#777777", font=("Arial", 9), anchor="nw", justify="left"
+        )
+
         # ══════════════════════════════════════════
         # LEFT COLUMN
         # ══════════════════════════════════════════
