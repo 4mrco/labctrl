@@ -188,9 +188,8 @@ class App:
         win = tk.Toplevel(self.root)
         win.title(f"Novidades da Versão {VERSAO_ATUAL}")
         win.configure(bg=bg)
-        win.resizable(False, False)
-        win.transient(self.root)
-        win.grab_set()
+        setup_dialog(win, self.root, min_width=520, min_height=400,
+                     resizable=(False, False), escape_close=True)
 
         tk.Label(win, text=f"✨  O que há de novo — v{VERSAO_ATUAL}",
                  bg=bg, fg=fg, font=("Segoe UI", 12, "bold")).pack(pady=(14, 4), padx=20)
@@ -213,11 +212,6 @@ class App:
         tk.Button(win, text="Entendi", command=win.destroy,
                   bd=0, highlightthickness=0, bg="#35383e", fg=fg,
                   padx=30, pady=6, font=("Segoe UI", 10, "bold")).pack(pady=(0, 14))
-
-        win.update_idletasks()
-        px = self.root.winfo_rootx() + (self.root.winfo_width()  - win.winfo_width())  // 2
-        py = self.root.winfo_rooty() + (self.root.winfo_height() - win.winfo_height()) // 2
-        win.geometry(f"+{px}+{py}")
 
     # ── UI base ──────────────────────────────
 
@@ -500,6 +494,7 @@ class App:
     def _abrir_menu(self):
         """Open the menu using the button's screen position."""
         self.menu.tk_popup(self.btn_menu.winfo_rootx(), self.btn_menu.winfo_rooty() + 20)
+        self.root.after_idle(self.menu.grab_release)
 
 
 
@@ -597,6 +592,7 @@ class App:
         """Display the month selection menu."""
         self._month_menu.tk_popup(self._month_dropdown_btn.winfo_rootx(),
                                    self._month_dropdown_btn.winfo_rooty() + 20)
+        self.root.after_idle(self._month_menu.grab_release)
 
     def _select_month(self, month_name):
         """Handle month selection from menu."""
@@ -774,6 +770,7 @@ class App:
     def _show_toast(self, message):
         toast = tk.Toplevel(self.root)
         toast.overrideredirect(True)
+        toast.transient(self.root)
         toast.configure(bg="#e74c3c")
         tk.Label(toast, text=message, bg="#e74c3c", fg="white", font=("Arial", 10, "bold"), padx=15, pady=8).pack()
         toast.update_idletasks()

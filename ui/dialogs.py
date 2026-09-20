@@ -67,8 +67,8 @@ def mostrar_toast(parent: tk.Tk | tk.Toplevel, mensagem: str, duration: int = 40
     """Display a subtle, self-dismissing toast notification at the bottom-right."""
     toast = tk.Toplevel(parent)
     toast.overrideredirect(True)
+    toast.transient(parent)
     toast.configure(bg="#222222")
-    toast.attributes("-topmost", True)
     
     lbl = tk.Label(toast, text=mensagem, bg="#222222", fg="#FFFFFF", font=("Arial", 10), padx=15, pady=8)
     lbl.pack()
