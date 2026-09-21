@@ -766,6 +766,7 @@ class App:
             for entry in undo_entries:
                 self._push_undo(entry)
             self.status(f"Saída de {len(reg_items)} aluno(s) registrada(s).")
+            self._show_toast(f"Saída de {len(reg_items)} aluno(s) registrada(s).", cor="#4a5a78")
         else:
             # Rollback on error
             self.status("Erro ao registrar saída.", erro=True)
@@ -782,6 +783,7 @@ class App:
                 finalizar_registro(rid, agora().strftime("%H:%M"))
                 self._push_undo({"tipo": "saida", "rid": rid, "nome": nome})
                 self.status(f"Saída de {nome} registrada.")
+                self._show_toast(f"Saída de {nome} registrada.", cor="#4a5a78")
             except Exception as e:
                 log.error("Falha ao registrar saída: %s", e)
                 self.status("Erro ao registrar saída.", erro=True)
@@ -802,12 +804,12 @@ class App:
         except tk.TclError:
             pass
 
-    def _show_toast(self, message):
+    def _show_toast(self, message, cor="#e74c3c"):
         toast = tk.Toplevel(self.root)
         toast.overrideredirect(True)
         toast.transient(self.root)
-        toast.configure(bg="#e74c3c")
-        tk.Label(toast, text=message, bg="#e74c3c", fg="white", font=("Arial", 10, "bold"), padx=15, pady=8).pack()
+        toast.configure(bg=cor)
+        tk.Label(toast, text=message, bg=cor, fg="white", font=("Arial", 10, "bold"), padx=15, pady=8).pack()
         toast.update_idletasks()
         x = self.root.winfo_rootx() + (self.root.winfo_width() - toast.winfo_width()) // 2
         y = self.root.winfo_rooty() + self.root.winfo_height() - toast.winfo_height() - 50
@@ -936,6 +938,7 @@ class App:
                     finalizar_registro(rid_ativo, agora().strftime("%H:%M"))
                     self._push_undo({"tipo": "saida", "rid": rid_ativo, "nome": nome})
                     self.status(f"Saída de {nome} registrada.")
+                    self._show_toast(f"Saída de {nome} registrada.", cor="#4a5a78")
                     self._atualizar_lista()
                 return False
 
@@ -968,6 +971,7 @@ class App:
         # status == "entrada_registrada"
         self._push_undo({"tipo": "entrada", "rid": resultado["rid"], "nome": nome})
         self.status(f"Entrada de {nome} registrada às {resultado['hora']}.")
+        self.combo_maquina.set("-")
         return True
 
     def registrar_entrada(self, event=None):
