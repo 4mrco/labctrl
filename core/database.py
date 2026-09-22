@@ -245,7 +245,9 @@ def buscar_meses() -> list[str]:
         datas = [r[0] for r in conn.execute(
             "SELECT DISTINCT data FROM registros"
         ).fetchall()]
-    meses = sorted(set(d[3:] for d in datas), reverse=True)
+    meses = sorted(set(d[3:] for d in datas),
+                   key=lambda m: (m[3:], m[:2]),
+                   reverse=True)
     return meses or [datetime.now().strftime("%m/%Y")]
 
 
