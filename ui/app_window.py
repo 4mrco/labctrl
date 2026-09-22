@@ -103,7 +103,7 @@ from ui.mapa import selecionar_maquina
 # ─────────────────────────────────────────────
 # VERSION
 # ─────────────────────────────────────────────
-VERSAO_ATUAL = "1.1"
+VERSAO_ATUAL = "1.2.2"
 
 
 
@@ -142,8 +142,6 @@ class App:
         self._active_popup = None
         self.root.bind("<FocusOut>", self._on_focus_out, add="+")
         
-        self.root.after(500, self._verificar_export_pendente)
-        self.root.after(800, self._verificar_orfaos)
         
         # Check if missed a backup by > 1 day
         try:
@@ -155,9 +153,9 @@ class App:
                     mostrar_toast(self.root, "Backup em atraso realizado com sucesso!")
         except Exception:
             pass
-        
-        # Show patch notes popup if new version or within 3-day window
-        self.root.after(1200, self._verificar_novidades)
+
+        # Serialized boot checks to avoid overlapping grabs
+        self.root.after(500, self._boot_checks)
 
     def _on_focus_out(self, event):
         """Forcefully unpost menus when the app loses focus to fix Linux WM quirks."""
@@ -775,21 +773,6 @@ class App:
         self._atualizar_lista()
         self._focus_matricula()
 
-    def _registrar_saida(self, matricula: str):
-        rid = buscar_registro_ativo(matricula)
-        if rid:
-            try:
-                nome = (buscar_aluno(matricula) or (matricula,))[0]
-                finalizar_registro(rid, agora().strftime("%H:%M"))
-                self._push_undo({"tipo": "saida", "rid": rid, "nome": nome})
-                self.status(f"Saída de {nome} registrada.")
-                self._show_toast(f"Saída de {nome} registrada.", cor="#4a5a78")
-            except Exception as e:
-                log.error("Falha ao registrar saída: %s", e)
-                self.status("Erro ao registrar saída.", erro=True)
-        self._atualizar_lista()
-        self._focus_matricula()
-
     def _push_undo(self, acao: dict):
         self._undo_stack.append(acao)
 
@@ -989,7 +972,17 @@ class App:
             if not res:
                 return
             nome, tipo = res
-            mat_db = None if tipo == "Aluno" else "SERVIDOR"
+            if tipo == "Servidor":
+                mat_db = gerar_id_servidor(nome)
+                if not buscar_aluno(mat_db):
+                    try:
+                        inserir_aluno(mat_db, nome, tipo="servidor")
+                    except Exception as e:
+                        log.error("Falha ao inserir servidor: %s", e)
+                        self.status("Erro ao cadastrar servidor.", erro=True)
+                        return
+            else:
+                mat_db = None
             if self._fluxo_entrada(mat_db, nome):
                 self._rebuild_abas()
                 self._ph_matricula.set("Matrícula")
@@ -1345,6 +1338,10 @@ class App:
 
     # ── Verificações no startup ───────────────
 
+    def _boot_checks(self):
+        self._verificar_export_pendente()
+        self.root.after(400, self._verificar_orfaos)
+
     def _verificar_export_pendente(self):
         mes_ant = mes_anterior()
         if mes_ant in self.config["exported_months"]:
@@ -1359,19 +1356,15 @@ class App:
     def _verificar_orfaos(self):
         orfaos = buscar_registros_orfaos()
         if not orfaos:
+            self.root.after(400, self._verificar_novidades)
             return
-        nomes = "\n".join(f"  • {r[1]}  —  {r[3]} às {r[4]}" for r in orfaos)
-        resp  = messagebox.askyesno(
-            "Registros em aberto",
-            f"Há {len(orfaos)} registro(s) de dias anteriores sem saída:\n\n"
-            f"{nomes}\n\nFechar todos agora?",
-            parent=self.root
-        )
-        if resp:
-            for r in orfaos:
-                finalizar_registro(r[0], None)
-            self._atualizar_lista()
-            self.status(f"{len(orfaos)} registro(s) órfão(s) encerrado(s).")
+        for r in orfaos:
+            finalizar_registro(r[0], None)
+            self._push_undo({"tipo": "saida", "rid": r[0], "nome": r[1]})
+        self._atualizar_lista()
+        self.status(f"{len(orfaos)} registro(s) órfão(s) encerrado(s) automaticamente.")
+        mostrar_toast(self.root, f"{len(orfaos)} registro(s) órfão(s) encerrado(s). Use Ctrl+Z para reverter.")
+        self.root.after(400, self._verificar_novidades)
 
     # ── Export ───────────────────────────────
 

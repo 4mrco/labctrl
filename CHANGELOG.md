@@ -39,3 +39,12 @@
 ### Configurações e Operação
 - **Saída Expressa:** Adicionada uma nova preferência no menu de Configurações para desativar o aviso "Tem certeza que deseja registrar a saída?". Quando desativado, o registro de saída via teclado ou clique se torna imediato.
 - **Instruções no Mapa:** Adicionado um texto auxiliar discreto no mapa interativo orientando sobre o uso das teclas numéricas e das letras "M" e "L" para seleção rápida de máquinas.
+
+## Versão 1.2.2 — 22/09/2026
+
+### Correções de Estabilidade 🔧
+
+- **Servidores com identidade própria:** Corrigido um problema em que múltiplos servidores registrados pelo mesmo fluxo de entrada (sem matrícula) collidiam em uma única sessão. Cada servidor agora recebe uma matrícula interna única e não interfere com outros.
+- **Órfãos corrigidos silenciosamente:** Registros de dias anteriores sem saída são encerrados automaticamente ao iniciar o sistema, sem exibir um popup de confirmação. Uma notificação discreta aparece e a reversão está disponível via Ctrl+Z.
+- **Ordem cronológica dos meses:** Corrigida a ordenação do seletor de meses para que anos diferentes sejam ordenados corretamente (ex.: Janeiro/2026 aparece depois de Dezembro/2025).
+- **Inicialização sem conflitos:** As verificações de inicialização (exportação pendente, registros órfãos, novidades) agora são executadas em sequência para evitar sobreposição de janelas.
