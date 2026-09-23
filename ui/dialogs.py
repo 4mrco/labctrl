@@ -38,14 +38,25 @@ def setup_dialog(win: tk.Toplevel, parent: tk.Tk | tk.Toplevel, min_width: int =
     def on_map(event=None):
         if mapped[0]:
             return
-        mapped[0] = True
         center_dialog(win, parent)
         try:
             win.grab_set()
+            mapped[0] = True
         except tk.TclError:
-            pass  # Window already destroyed or grab failed
+            win.after(30, on_map)  # Window already destroyed or grab failed, retry or let it die
 
     win.bind("<Map>", on_map, add='+')
+
+    def on_destroy(event):
+        if event.widget is not win:
+            return
+        try:
+            if hasattr(parent, "_from_dialog"):
+                parent._from_dialog()
+        except tk.TclError:
+            pass
+
+    win.bind("<Destroy>", on_destroy, add='+')
 
 
 def focus_first_field(*fields):

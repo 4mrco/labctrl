@@ -116,16 +116,39 @@ class DialogoSelecaoMapa(tk.Toplevel):
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        # Center on parent, then grab
+        # Center before <Map> fires so geometry is already set when grab is acquired
         self.update_idletasks()
         px, py = parent.winfo_rootx(), parent.winfo_rooty()
         pw, ph = parent.winfo_width(), parent.winfo_height()
         wx, wh = self.winfo_width(), self.winfo_height()
         self.geometry(f"+{px + (pw - wx) // 2}+{py + (ph - wh) // 2}")
-        try:
-            self.grab_set()
-        except tk.TclError:
-            pass
+
+        # Grab only after the window is mapped — same pattern as setup_dialog
+        _grabbed = [False]
+        def _on_map(event=None):
+            if _grabbed[0]:
+                return
+            try:
+                self.grab_set()
+                self.focus_force()   # força o WM a dar foco ao mapa (focus_set só pede dentro da app)
+                self.lift()
+                _grabbed[0] = True
+            except tk.TclError:
+                if self.winfo_exists():
+                    self.after(30, _on_map)
+
+        self.bind("<Map>", _on_map, add="+")
+
+        def _on_mapa_destroy(event):
+            if event.widget is not self:
+                return
+            try:
+                if hasattr(parent, "_from_dialog"):
+                    parent.after(80, parent._from_dialog)
+            except tk.TclError:
+                pass
+
+        self.bind("<Destroy>", _on_mapa_destroy, add="+")
 
     # ── Drawing ───────────────────────────────────────────────────
 

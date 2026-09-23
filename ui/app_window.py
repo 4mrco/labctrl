@@ -141,6 +141,9 @@ class App:
         # Track active popup to fix Linux WM dangling menus
         self._active_popup = None
         self.root.bind("<FocusOut>", self._on_focus_out, add="+")
+
+        # Expose _from_dialog on root so setup_dialog can call it without coupling
+        self.root._from_dialog = self._from_dialog
         
         
         # Check if missed a backup by > 1 day
@@ -170,14 +173,14 @@ class App:
     # ── Version / Patch Notes ─────────────────
 
     def _verificar_novidades(self):
-        """Show a patch-notes popup for 3 days after a new version is detected."""
+        """Show a patch-notes popup for 2 days after a new version is detected."""
         versao_gravada = self.config.get("versao_registrada", "")
         expira_str     = self.config.get("popup_expira_em", "")
 
-        # New version detected → reset 3-day window
+        # New version detected → reset 2-day window
         if versao_gravada != VERSAO_ATUAL:
             self.config["versao_registrada"] = VERSAO_ATUAL
-            expira = date.today() + timedelta(days=3)
+            expira = date.today() + timedelta(days=2)
             self.config["popup_expira_em"] = expira.isoformat()
             save_config(self.config)
         else:
@@ -787,6 +790,22 @@ class App:
         except tk.TclError:
             pass
 
+    def _from_dialog(self):
+        """Devolve foco ao campo de matrícula após todos os diálogos liberarem o grab."""
+        if getattr(self, "_from_dialog_job", None):
+            self.root.after_cancel(self._from_dialog_job)
+        
+        def _check():
+            try:
+                if self.root.grab_current():
+                    self._from_dialog_job = self.root.after(50, _check)
+                else:
+                    self._focus_matricula()
+            except tk.TclError:
+                pass
+                
+        self._from_dialog_job = self.root.after(50, _check)
+
     def _show_toast(self, message, cor="#e74c3c"):
         toast = tk.Toplevel(self.root)
         toast.overrideredirect(True)
@@ -926,6 +945,11 @@ class App:
                 return False
 
         # User is entering — determine machine: map dialog or combobox
+        # CANCEL any pending _from_dialog polling so it doesn't fire while the map is opening
+        if getattr(self, "_from_dialog_job", None):
+            self.root.after_cancel(self._from_dialog_job)
+            self._from_dialog_job = None
+
         if self.config.get("escolher_maquina_entrada"):
             ocupadas = buscar_maquinas_ocupadas()
             maquina_real = selecionar_maquina(self.root, ocupadas)
