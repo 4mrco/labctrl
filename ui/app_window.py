@@ -125,6 +125,8 @@ class App:
         self._relogio_job = None
         # pilha de undo: lista de dicts {tipo, ...dados para reverter}
         self._undo_stack: list[dict] = []
+        # bolsista reminder: {nome: (first_ts, last_ts)} em segundos (time.monotonic)
+        self._bolsista_ts: dict[str, tuple[float, float]] = {}
 
         self._build_ui()
         self._build_menu()
@@ -339,6 +341,18 @@ class App:
         self.combo_bolsista.bind("<Tab>", self._focus_matricula_from_bolsista)
         self.combo_bolsista.bind("<FocusIn>", self._on_bolsista_focus_in)
         self.combo_bolsista.pack(side="left", padx=8)
+
+        # Bolsista reminder label (*)
+        t = TEMAS["default"]
+        self.lbl_bolsista_reminder = tk.Label(
+            self.toolbar, text="*", fg="#F0A500", bg=t["bg"],
+            font=("Arial", 13, "bold"), cursor="hand2"
+        )
+        # Do not pack yet — shown only when reminder is active
+        self._bolsista_reminder_visible = False
+        self._bolsista_tooltip_win = None
+        self.lbl_bolsista_reminder.bind("<Enter>", self._show_bolsista_tooltip)
+        self.lbl_bolsista_reminder.bind("<Leave>", self._hide_bolsista_tooltip)
 
         # ENTRADA button
         self.btn_entrada = tk.Button(self.toolbar, text="ENTRADA",
@@ -819,11 +833,70 @@ class App:
         self.root.after(2500, toast.destroy)
 
     def _on_bolsista_change(self, event=None):
-        """Salva o bolsista selecionado ao mudar a escolha."""
+        """Salva o bolsista selecionado ao mudar a escolha e reseta o reminder."""
         selecionado = self.combo_bolsista.get()
         if selecionado:
             self.config["ultimo_bolsista"] = selecionado
             save_config(self.config)
+        # Reset tracking for new bolsista
+        self._bolsista_ts.pop(selecionado, None)
+        self._set_bolsista_reminder(False)
+
+    def _set_bolsista_reminder(self, visible: bool):
+        """Show or hide the * reminder label next to combo_bolsista."""
+        if visible and not self._bolsista_reminder_visible:
+            self.lbl_bolsista_reminder.pack(side="left", padx=(0, 4))
+            self._bolsista_reminder_visible = True
+        elif not visible and self._bolsista_reminder_visible:
+            self.lbl_bolsista_reminder.pack_forget()
+            self._bolsista_reminder_visible = False
+            self._hide_bolsista_tooltip()
+
+    def _update_bolsista_reminder(self):
+        """Called after every successful entry. Updates timestamps and shows/hides *."""
+        import time
+        LIMIAR_SEGUNDOS = 2 * 3600  # 2 hours
+        bolsista = self.combo_bolsista.get()
+        if not bolsista:
+            return
+        agora_mono = time.monotonic()
+        if bolsista in self._bolsista_ts:
+            first_ts, _ = self._bolsista_ts[bolsista]
+            self._bolsista_ts[bolsista] = (first_ts, agora_mono)
+            elapsed = agora_mono - first_ts
+            self._set_bolsista_reminder(elapsed >= LIMIAR_SEGUNDOS)
+        else:
+            self._bolsista_ts[bolsista] = (agora_mono, agora_mono)
+            self._set_bolsista_reminder(False)
+
+    def _show_bolsista_tooltip(self, event=None):
+        """Show a lightweight tooltip next to the * reminder label."""
+        if self._bolsista_tooltip_win:
+            return
+        try:
+            tip = tk.Toplevel(self.root)
+            tip.overrideredirect(True)
+            tip.transient(self.root)
+            t = TEMAS["default"]
+            tk.Label(tip, text="Confira se o bolsista selecionado está correto.",
+                     bg="#3A3A1E", fg="#F0D080", font=("Arial", 9),
+                     padx=8, pady=4, relief="flat").pack()
+            tip.update_idletasks()
+            x = self.lbl_bolsista_reminder.winfo_rootx()
+            y = self.lbl_bolsista_reminder.winfo_rooty() + self.lbl_bolsista_reminder.winfo_height() + 2
+            tip.geometry(f"+{x}+{y}")
+            self._bolsista_tooltip_win = tip
+        except tk.TclError:
+            pass
+
+    def _hide_bolsista_tooltip(self, event=None):
+        """Destroy the tooltip window."""
+        if self._bolsista_tooltip_win:
+            try:
+                self._bolsista_tooltip_win.destroy()
+            except tk.TclError:
+                pass
+            self._bolsista_tooltip_win = None
 
     def _desfazer(self, event=None):
         if not self._undo_stack:
@@ -979,6 +1052,7 @@ class App:
         self._push_undo({"tipo": "entrada", "rid": resultado["rid"], "nome": nome})
         self.status(f"Entrada de {nome} registrada às {resultado['hora']}.")
         self.combo_maquina.set("-")
+        self._update_bolsista_reminder()
         return True
 
     def registrar_entrada(self, event=None):
@@ -1092,7 +1166,7 @@ class App:
         # Clear and configure tree
         self.tree.delete(*self.tree.get_children())
 
-        self.tree.tag_configure("ATIVO", background=t["ativo_bg"])
+        self.tree.tag_configure("ATIVO",     background=t["ativo_bg"])
         self.tree.tag_configure("FINALIZADO", background=t["bg"])
 
         registros = buscar_registros_por_mes(mes)
@@ -1333,10 +1407,10 @@ class App:
                                bd=0, relief="flat")
 
         # Treeview row tags (Treeview-specific API, not covered by Style)
-        self.tree.tag_configure("0",          background=row_a)
-        self.tree.tag_configure("1",          background=row_b)
-        self.tree.tag_configure("ATIVO",      background=ativo_bg)
-        self.tree.tag_configure("FINALIZADO", background=bg)
+        self.tree.tag_configure("0",           background=row_a)
+        self.tree.tag_configure("1",           background=row_b)
+        self.tree.tag_configure("ATIVO",       background=ativo_bg)
+        self.tree.tag_configure("FINALIZADO",  background=bg)
 
     def fechar_aplicacao(self):
         try:
