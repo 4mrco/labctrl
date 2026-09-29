@@ -12,7 +12,7 @@ from core.config import TEMAS
 
 # ── Layout constants ──────────────────────────────────────────────
 # Canvas size
-CW, CH = 680, 460
+CW, CH = 782, 530
 
 # Colors
 _t = TEMAS["default"]
@@ -20,10 +20,12 @@ BG       = _t["bg"]
 FG       = _t["fg"]
 FIELD    = _t["field"]
 SELECT   = _t["select"]
-PC_FREE       = "#2A3B5A"  # base dark blue for free PCs
-PC_OCCUPIED   = "#151D2D"  # deeper dark blue for occupied PCs
-ML_FREE       = "#2E4A3E"  # base dark green for free ML slots
-ML_OCCUPIED   = "#17251F"  # deeper dark green for occupied ML slots
+PC_FREE       = "#1E4D8C"  # bright blue for free PCs (clearly available)
+PC_OCCUPIED   = "#1A1A2E"  # very dark navy for occupied PCs (clearly taken)
+ML_FREE       = "#1A6B3C"  # bright green for free ML slots (clearly available)
+ML_OCCUPIED   = "#0F2218"  # very dark green for occupied ML slots (clearly taken)
+PC_FREE_RING  = "#5B9BD5"  # light blue ring outline for free PCs
+ML_FREE_RING  = "#4EC97B"  # light green ring outline for free ML slots
 BOLS_CLR      = "#1e2b3c"  # dark blue reference square for Bolsista
 HOVER         = "#3A5F9A"  # hover highlight
 DESK_CLR      = "#444444"  # teacher desk (gray)
@@ -155,58 +157,68 @@ class DialogoSelecaoMapa(tk.Toplevel):
     def _draw_map(self):
         c = self.canvas
 
-        # ── Teacher / Server desk (top-right, blank) ─
-        c.create_rectangle(460, 20, 580, 60, fill=DESK_CLR, outline="#555", width=1)
-        self._draw_bolsista(c, 540, 40)
+        # ── Teacher / Server desk (top-right) — L-shaped ─
+        # Seamless L-shape polygon to avoid inner dividing lines
+        c.create_polygon(
+            663, 5,    # Top-left of vertical stem
+            713, 5,    # Top-right of vertical stem
+            713, 90,   # Bottom-right corner
+            543, 90,   # Bottom-left corner
+            543, 40,   # Top-left of horizontal foot
+            663, 40,   # Inner corner
+            fill=DESK_CLR, outline="#555", width=1
+        )
+        # Bolsista reference stays on horizontal portion, moved to the right inner corner
+        self._draw_bolsista(c, 638, 65)
 
         # ── Shortcuts Helper Text (top-left) ─
         c.create_text(
-            60, 20,
-            text="Selecione para a respectiva máquina\nPressione o número no teclado\nPressione M ou L para mesa livre",
-            fill="#777777", font=("Arial", 9), anchor="nw", justify="left"
+            69, 23,
+            text="Pressione 1–9 para máquinas 01–09\nPressione M ou L para mesa livre",
+            fill=TEXT_LIGHT, font=("Arial", 11), anchor="nw", justify="left"
         )
 
-        # ══════════════════════════════════════════
+        # ════════════════════════════════════════════
         # LEFT COLUMN
-        # ══════════════════════════════════════════
+        # ════════════════════════════════════════════
 
         # Table 1: ML zone (top-left)
-        self._draw_table(c, 60, 100, 240, 75, "Mesa 1 — Notebook (ML)")
-        ml_left_slots = [(100, 125), (180, 125), (260, 125)]
-        self._draw_ml_slots(c, ml_left_slots, ["ML-1", "ML-2", "ML-3"], tx=60, ty=100, tw=240)
+        self._draw_table(c, 69, 145, 276, 86, "Mesa 1 — Notebook (ML)")
+        ml_left_slots = [(115, 174), (207, 174), (299, 174)]
+        self._draw_ml_slots(c, ml_left_slots, ["ML-1", "ML-2", "ML-3"], tx=69, ty=145, tw=276)
 
         # Table 2: PCs 04, 05, 06 (mid-left)
-        self._draw_table(c, 60, 210, 240, 75, "Mesa 2")
-        self._draw_pc(c, 100, 235, "04")
-        self._draw_pc(c, 180, 235, "05")
-        self._draw_pc(c, 260, 235, "06")
+        self._draw_table(c, 69, 272, 276, 86, "Mesa 2")
+        self._draw_pc(c, 115, 300, "04")
+        self._draw_pc(c, 207, 300, "05")
+        self._draw_pc(c, 299, 300, "06")
 
         # Table 3: PCs 10, 11, 12 (bottom-left)
-        self._draw_table(c, 60, 320, 240, 75, "Mesa 3")
-        self._draw_pc(c, 100, 345, "10")
-        self._draw_pc(c, 180, 345, "11")
-        self._draw_pc(c, 260, 345, "12")
+        self._draw_table(c, 69, 398, 276, 86, "Mesa 3")
+        self._draw_pc(c, 115, 427, "10")
+        self._draw_pc(c, 207, 427, "11")
+        self._draw_pc(c, 299, 427, "12")
 
-        # ══════════════════════════════════════════
+        # ════════════════════════════════════════════
         # RIGHT COLUMN
-        # ══════════════════════════════════════════
+        # ════════════════════════════════════════════
 
         # Table 4: PCs 01, 02, 03 (top-right)
-        self._draw_table(c, 380, 100, 240, 75, "Mesa 4")
-        self._draw_pc(c, 420, 125, "01")
-        self._draw_pc(c, 500, 125, "02")
-        self._draw_pc(c, 580, 125, "03")
+        self._draw_table(c, 437, 145, 276, 86, "Mesa 4")
+        self._draw_pc(c, 483, 174, "01")
+        self._draw_pc(c, 575, 174, "02")
+        self._draw_pc(c, 667, 174, "03")
 
         # Table 5: ML zone (mid-right)
-        self._draw_table(c, 380, 210, 240, 75, "Mesa 5 — Notebook (ML)")
-        ml_right_slots = [(420, 235), (500, 235), (580, 235)]
-        self._draw_ml_slots(c, ml_right_slots, ["ML-4", "ML-5", "ML-6"], tx=380, ty=210, tw=240)
+        self._draw_table(c, 437, 272, 276, 86, "Mesa 5 — Notebook (ML)")
+        ml_right_slots = [(483, 300), (575, 300), (667, 300)]
+        self._draw_ml_slots(c, ml_right_slots, ["ML-4", "ML-5", "ML-6"], tx=437, ty=272, tw=276)
 
         # Table 6: PCs 07, 08, 09 (bottom-right)
-        self._draw_table(c, 380, 320, 240, 75, "Mesa 6")
-        self._draw_pc(c, 420, 345, "07")
-        self._draw_pc(c, 500, 345, "08")
-        self._draw_pc(c, 580, 345, "09")
+        self._draw_table(c, 437, 398, 276, 86, "Mesa 6")
+        self._draw_pc(c, 483, 427, "07")
+        self._draw_pc(c, 575, 427, "08")
+        self._draw_pc(c, 667, 427, "09")
 
 
 
@@ -220,14 +232,20 @@ class DialogoSelecaoMapa(tk.Toplevel):
         c.create_rectangle(cx - 15, cy - 15, cx + 15, cy + 15, fill=BOLS_CLR, outline="#555", width=2)
 
     def _draw_pc(self, c: tk.Canvas, cx, cy, label: str):
-        """Draw a PC station. Both states use dark backgrounds."""
+        """Draw a PC station. Free machines have a bright ring; occupied are dark."""
         occupied = label in self._ocupadas
         fill = PC_OCCUPIED if occupied else PC_FREE
-        outline = HOVER if occupied else "#555"
+        outline = HOVER if occupied else PC_FREE_RING
+        width = 2 if occupied else 3
         text_color = TEXT_LIGHT
 
+        # For free PCs: draw a subtle outer ring to make them stand out
+        if not occupied:
+            c.create_oval(*_center(cx, cy, PC_R + 4),
+                          fill="", outline=PC_FREE_RING, width=1)
+
         # Draw circle FIRST, then text ON TOP (correct z-order)
-        cid = c.create_oval(*_center(cx, cy, PC_R), fill=fill, outline=outline, width=2)
+        cid = c.create_oval(*_center(cx, cy, PC_R), fill=fill, outline=outline, width=width)
         tid = c.create_text(cx, cy, text=label, fill=text_color,
                             font=("Arial", 10, "bold"))
 
@@ -238,7 +256,7 @@ class DialogoSelecaoMapa(tk.Toplevel):
         self._oval_to_text[cid] = tid
 
     def _draw_ml_slots(self, c: tk.Canvas, positions: list[tuple], labels: list[str], tx: int, ty: int, tw: int):
-        """Draw 3 ML slot circles. Both states use dark backgrounds."""
+        """Draw 3 ML slot circles. Free slots have a bright ring; occupied are dark."""
         for i, (cx, cy) in enumerate(positions):
             label = labels[i]
             occupied = label in self._ocupadas
@@ -249,10 +267,16 @@ class DialogoSelecaoMapa(tk.Toplevel):
                 self._ml_count -= 1
                 
             fill = ML_OCCUPIED if occupied else ML_FREE
-            outline = HOVER if occupied else "#555"
+            outline = HOVER if occupied else ML_FREE_RING
+            width = 2 if occupied else 3
             text_color = TEXT_LIGHT
 
-            cid = c.create_oval(*_center(cx, cy, ML_SLOT_R), fill=fill, outline=outline, width=2)
+            # For free ML slots: draw a subtle outer ring
+            if not occupied:
+                c.create_oval(*_center(cx, cy, ML_SLOT_R + 4),
+                              fill="", outline=ML_FREE_RING, width=1)
+
+            cid = c.create_oval(*_center(cx, cy, ML_SLOT_R), fill=fill, outline=outline, width=width)
             tid = c.create_text(cx, cy, text="ML", fill=text_color,
                                 font=("Arial", 10, "bold"))
 
