@@ -1,16 +1,15 @@
 # LabCTRL — Novidades
 
-## Versão 1.2.2 — 22/09/2026
+## Versão 1.2.3 — 04/10/2026
 
-### Correções de Estabilidade 🔧
+### Robustez & Automação 🔧
+- **Exportação automática do mês anterior:** O sistema agora exporta silenciosamente o CSV do mês anterior no primeiro boot em que o mês consta como não exportado. Sem popups ou cliques, o arquivo é salvo em `exports/YYYY-MM/`.
+- **Duplo slot de backup (12h e 17h):** Implementação de dois backups automáticos diários rastreados de forma independente. Se o app estiver desligado em um horário, o backup é compensado no próximo boot do dia.
+- **Detecção de anomalia de relógio:** Nas primeiras 15 minutos de execução, se o LabCTRL detectar que o relógio do sistema operacional está atrasado em relação ao último registro do banco, ele intercepta a entrada e exibe um alerta preventivo.
+- **Proteção de Inputs (Debounce):** Implementada trava temporal de 1 segundo de alta precisão na ação de entrada para prevenir registros acidentais duplicados por cliques rápidos ou teclado.
 
-- **Servidores com identidade própria:** Corrigido um problema em que múltiplos servidores registrados pelo mesmo fluxo de entrada (sem matrícula) collidiam em uma única sessão. Cada servidor agora recebe uma matrícula interna única e não interfere com outros.
-- **Órfãos corrigidos silenciosamente:** Registros de dias anteriores sem saída são encerrados automaticamente ao iniciar o sistema, sem exibir um popup de confirmação. Uma notificação discreta aparece e a reversão está disponível via Ctrl+Z.
-- **Ordem cronológica dos meses:** Corrigida a ordenação do seletor de meses para que anos diferentes sejam ordenados corretamente.
-- **Inicialização sem conflitos:** As verificações de inicialização (exportação pendente, registros órfãos, novidades) agora são executadas em sequência para evitar sobreposição de janelas.
-- **Foco de teclado restaurado:** Resolvido o roubo intermitente de foco no Linux entre transições de janelas modais. Digitar a máquina agora funciona sempre de primeira após usar o registro manual.
-
-### Melhorias Gerais ⚙️
-
-- **Feedback visual de saída:** Ao registrar a saída de um usuário que já estava dentro do laboratório, uma notificação (toast) cinza-azulada agora aparece na tela para confirmar a ação visualmente.
-- **Reset do seletor de máquina:** O seletor de máquinas agora retorna automaticamente para o estado vazio ("-") logo após o registro bem-sucedido de qualquer entrada, agilizando o atendimento ao próximo usuário.
+### Interface & Experiência de Uso (UX) 🎨
+- **Confirmação inteligente de Matrícula:** Matrículas não reconhecidas abrem um dialog expandido. Se o usuário corrigir a digitação para uma matrícula existente diretamente nessa tela, o sistema inteligentemente reaproveita o cadastro em vez de duplicar.
+- **Timeout no Mapa Interativo:** O mapa de seleção agora conta com um temporizador de 60 segundos. Sem interação, a tela é liberada automaticamente (fallback), evitando que seleções abandonadas travem a fila.
+- **Legibilidade do Mapa:** Ajuste fino nas cores das máquinas e slots de mesa livre, acompanhado de novos textos instrutivos para facilitar a leitura rápida pelos usuários.
+- **Lembrete do Bolsista:** Nova sinalização visual integrada à interface para auxiliar o gerenciamento da rotina e troca de turnos.

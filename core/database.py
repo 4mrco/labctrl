@@ -239,6 +239,14 @@ def buscar_maquinas_ocupadas() -> list[str]:
         ).fetchall()]
 
 
+@safe_query(None)
+def buscar_ultimo_registro() -> tuple | None:
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT data, entrada FROM registros ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+
+
 @safe_query([])
 def buscar_meses() -> list[str]:
     with get_conn() as conn:
