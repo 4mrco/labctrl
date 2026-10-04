@@ -1,5 +1,6 @@
 import os
 import tkinter as tk
+from datetime import datetime
 from core.config import TEMAS
 
 def center_dialog(win: tk.Toplevel, parent: tk.Tk | tk.Toplevel):
@@ -271,6 +272,92 @@ def pedir_input(parent: tk.Tk | tk.Toplevel, titulo: str, mensagem: str, valor_i
     bind_enter_to_button(entry, ok_btn)
     win.wait_window()
     return resultado["valor"]
+
+
+def pedir_nome_com_matricula(parent: tk.Tk | tk.Toplevel, matricula: str) -> tuple[str, str] | None:
+    t = TEMAS["default"]
+    bg, fg, field = t["bg"], t["fg"], t["field"]
+    win = tk.Toplevel(parent)
+    win.title("Confira sua matrícula")
+    win.configure(bg=bg)
+    setup_dialog(win, parent, min_width=400, min_height=160,
+                 resizable=(False, False), escape_close=True)
+
+    tk.Label(win, text="Confira sua matrícula", bg=bg, fg=fg,
+             font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=12, pady=(14, 2))
+    entry_mat = tk.Entry(win, width=20, bd=0, highlightthickness=0, bg=field, fg=fg)
+    entry_mat.grid(row=0, column=1, padx=12, pady=(14, 2))
+    entry_mat.insert(0, matricula)
+    entry_mat.select_range(0, tk.END)
+
+    tk.Label(win, text="Insira seu nome", bg=bg, fg=fg,
+             font=("Segoe UI", 10, "bold")).grid(row=1, column=0, sticky="w", padx=12, pady=(8, 2))
+    entry_nome = tk.Entry(win, width=28, bd=0, highlightthickness=0, bg=field, fg=fg)
+    entry_nome.grid(row=1, column=1, padx=12, pady=(8, 2))
+
+    resultado = {"valor": None}
+
+    def confirmar(event=None):
+        mat_final = entry_mat.get().strip()
+        nome = entry_nome.get().strip()
+        if not mat_final or not nome:
+            return
+        resultado["valor"] = (nome, mat_final)
+        win.destroy()
+
+    entry_mat.bind("<Return>", lambda e: entry_nome.focus())
+    entry_nome.bind("<Return>", confirmar)
+    win.bind("<Return>", confirmar)
+    win.bind("<KP_Enter>", confirmar)
+
+    tk.Button(win, text="Salvar", command=confirmar, bd=0, highlightthickness=0,
+              bg="#35383e", fg=fg).grid(row=2, column=0, columnspan=2, pady=(12, 14))
+
+    focus_first_field(entry_nome)
+    win.wait_window()
+    return resultado["valor"]
+
+
+def confirmar_data_hora_suspeita(parent: tk.Tk | tk.Toplevel,
+                                  anterior: datetime,
+                                  novo: datetime) -> bool:
+    from datetime import datetime as _dt
+    t = TEMAS["default"]
+    bg, fg, field = t["bg"], t["fg"], t["field"]
+    win = tk.Toplevel(parent)
+    win.title("Data/hora suspeita")
+    win.configure(bg=bg)
+    setup_dialog(win, parent, min_width=380, min_height=160,
+                 resizable=(False, False), escape_close=True)
+
+    msg = (
+        f"O último registro foi às {anterior.strftime('%d/%m/%Y %H:%M')}\n"
+        f"e agora são {novo.strftime('%d/%m/%Y %H:%M')}.\n\n"
+        f"Confira o relógio do computador."
+    )
+    tk.Label(win, text=msg, bg=bg, fg=fg, justify="center").pack(pady=(16, 8))
+
+    resultado = {"proceder": False}
+
+    def ignorar():
+        resultado["proceder"] = True
+        win.destroy()
+
+    def verificar():
+        resultado["proceder"] = False
+        win.destroy()
+
+    btn_frame = tk.Frame(win, bg=bg)
+    btn_frame.pack(pady=(8, 16))
+    tk.Button(btn_frame, text="Ignorar desta vez", command=ignorar,
+              bd=0, highlightthickness=0, bg="#35383e", fg=fg,
+              padx=15, pady=6).pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Verificar relógio", command=verificar,
+              bd=0, highlightthickness=0, bg="#35383e", fg=fg,
+              padx=15, pady=6).pack(side="left", padx=5)
+
+    win.wait_window()
+    return resultado["proceder"]
 
 
 def popup_sem_matricula(parent: tk.Tk | tk.Toplevel) -> tuple[str, str] | None:

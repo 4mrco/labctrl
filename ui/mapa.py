@@ -14,6 +14,8 @@ from core.config import TEMAS
 # Canvas size
 CW, CH = 782, 530
 
+TIMEOUT_MS = 60_000
+
 # Colors
 _t = TEMAS["default"]
 BG       = _t["bg"]
@@ -124,6 +126,8 @@ class DialogoSelecaoMapa(tk.Toplevel):
         pw, ph = parent.winfo_width(), parent.winfo_height()
         wx, wh = self.winfo_width(), self.winfo_height()
         self.geometry(f"+{px + (pw - wx) // 2}+{py + (ph - wh) // 2}")
+
+        self._timeout_job = self.after(TIMEOUT_MS, self._on_timeout)
 
         # Grab only after the window is mapped — same pattern as setup_dialog
         _grabbed = [False]
@@ -351,6 +355,7 @@ class DialogoSelecaoMapa(tk.Toplevel):
         if oval_id:
             machine = self._items.get(oval_id)
             if machine:
+                self._cancel_timeout()
                 self.result = machine
                 self.destroy()
 
@@ -361,6 +366,7 @@ class DialogoSelecaoMapa(tk.Toplevel):
             self._on_close()
             return
         if ch in ("M", "L"):
+            self._cancel_timeout()
             self.result = "ML"
             self.destroy()
             return
@@ -368,16 +374,31 @@ class DialogoSelecaoMapa(tk.Toplevel):
             num = int(ch)
             if 1 <= num <= 9:
                 label = f"{num:02}"
+                self._cancel_timeout()
                 self.result = label
                 self.destroy()
 
+    def _cancel_timeout(self):
+        if getattr(self, "_timeout_job", None):
+            try:
+                if self.winfo_exists():
+                    self.after_cancel(self._timeout_job)
+            except Exception:
+                pass
+            self._timeout_job = None
+
+    def _on_timeout(self):
+        self._sem_maquina()
+
     def _sem_maquina(self):
         """Fallback: no machine."""
+        self._cancel_timeout()
         self.result = "-"
         self.destroy()
 
     def _on_close(self):
         """User closed without selecting."""
+        self._cancel_timeout()
         self.result = None
         self.destroy()
 

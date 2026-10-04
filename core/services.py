@@ -34,6 +34,9 @@ def load_config() -> dict:
     cfg.setdefault("versao_registrada", "")
     cfg.setdefault("popup_expira_em", "")
     cfg.setdefault("confirmar_saida", True)
+    if "backups_diarios" not in cfg:
+        legacy = cfg.get("ultimo_backup", "")
+        cfg["backups_diarios"] = {"12": legacy, "17": legacy} if legacy else {}
     return cfg
 
 

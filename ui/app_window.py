@@ -6,6 +6,7 @@ import sqlite3
 import csv
 import json
 import os
+import time
 import logging
 from datetime import datetime, date, timedelta
 from contextlib import contextmanager
@@ -57,6 +58,7 @@ from core.database import (
     restaurar_registro_db,
     buscar_registros_por_mes,
     buscar_registros_orfaos,
+    buscar_ultimo_registro,
     contar_registros_hoje,
     contar_ativos,
     buscar_maquinas_ocupadas,
@@ -96,14 +98,14 @@ from ui.dialogs import (
     setup_dialog, focus_first_field, bind_enter_to_button,
     visualizar_db, abrir_bolsistas,
     abrir_alunos, abrir_form_edicao, copiar_periodo,
-    mostrar_toast
+    mostrar_toast, pedir_nome_com_matricula
 )
 from ui.mapa import selecionar_maquina
 
 # ─────────────────────────────────────────────
 # VERSION
 # ─────────────────────────────────────────────
-VERSAO_ATUAL = "1.2.2"
+VERSAO_ATUAL = "1.2.3"
 
 
 
@@ -127,6 +129,8 @@ class App:
         self._undo_stack: list[dict] = []
         # bolsista reminder: {nome: (first_ts, last_ts)} em segundos (time.monotonic)
         self._bolsista_ts: dict[str, tuple[float, float]] = {}
+        self._ultima_entrada_ts: float = 0.0
+        self._boot_ts: float = time.monotonic()
 
         self._build_ui()
         self._build_menu()
@@ -148,14 +152,18 @@ class App:
         self.root._from_dialog = self._from_dialog
         
         
-        # Check if missed a backup by > 1 day
+        # Per-slot backup catch-up (today only, no backlog for missed days)
         try:
-            ultimo_bkp_str = self.config.get("ultimo_backup", "")
-            if ultimo_bkp_str:
-                ultimo_bkp_date = datetime.strptime(ultimo_bkp_str, "%Y-%m-%d").date()
-                if (date.today() - ultimo_bkp_date).days > 1:
+            today_str = date.today().strftime("%Y-%m-%d")
+            now = datetime.now()
+            slots = self.config.get("backups_diarios", {})
+            for slot_hour, slot_key in [(12, "12"), (17, "17")]:
+                if now.hour >= slot_hour and slots.get(slot_key) != today_str:
                     executar_backup_diario()
-                    mostrar_toast(self.root, "Backup em atraso realizado com sucesso!")
+                    slots[slot_key] = today_str
+                    self.config["backups_diarios"] = slots
+                    save_config(self.config)
+                    mostrar_toast(self.root, f"Backup das {slot_key}h em atraso realizado!")
         except Exception:
             pass
 
@@ -994,6 +1002,25 @@ class App:
         win.bind("<Return>", lambda _: salvar())
         win.bind("<KP_Enter>", lambda _: salvar())
 
+    def _verificar_relogio(self) -> bool:
+        JANELA = 15 * 60
+        TOLERANCIA = timedelta(minutes=5)
+        if time.monotonic() - self._boot_ts > JANELA:
+            return True
+        reg = buscar_ultimo_registro()
+        if not reg:
+            return True
+        data_ant, entrada_ant = reg
+        try:
+            dt_ant = datetime.strptime(f"{data_ant} {entrada_ant}", "%d/%m/%Y %H:%M")
+            dt_novo = agora().replace(second=0, microsecond=0)
+            if dt_novo < dt_ant - TOLERANCIA:
+                from ui.dialogs import confirmar_data_hora_suspeita
+                return confirmar_data_hora_suspeita(self.root, dt_ant, dt_novo)
+        except Exception:
+            pass
+        return True
+
     def _fluxo_entrada(self, matricula: str | None, nome: str) -> bool:
         """UI glue: chama o serviço de entrada e reage ao resultado."""
         # Check for active session FIRST, before showing the map
@@ -1016,6 +1043,9 @@ class App:
                     self._show_toast(f"Saída de {nome} registrada.", cor="#4a5a78")
                     self._atualizar_lista()
                 return False
+
+        if not self._verificar_relogio():
+            return False
 
         # User is entering — determine machine: map dialog or combobox
         # CANCEL any pending _from_dialog polling so it doesn't fire while the map is opening
@@ -1056,6 +1086,10 @@ class App:
         return True
 
     def registrar_entrada(self, event=None):
+        agora_mono = time.monotonic()
+        if agora_mono - self._ultima_entrada_ts < 1.0:
+            return
+        self._ultima_entrada_ts = agora_mono
         matricula = self.entry_matricula.get().strip()
         # Handle placeholder text
         if matricula == "Matrícula" or matricula == "":
@@ -1089,16 +1123,24 @@ class App:
 
         resultado = buscar_aluno(matricula)
         if not resultado:
-            nome = pedir_input(self.root, "Novo aluno", "Nome completo:")
-            if not nome:
+            res = pedir_nome_com_matricula(self.root, matricula)
+            if not res:
+                return
+            nome, matricula = res
+            if len(matricula) < 6 or not matricula.isdigit():
+                self._show_toast("A matrícula deve ter 6 dígitos.")
                 return
             nome = normalizar_nome(nome)
-            try:
-                inserir_aluno(matricula, nome, tipo="aluno")
-            except Exception as e:
-                log.error("Falha ao inserir aluno: %s", e)
-                self.status("Erro ao cadastrar aluno.", erro=True)
-                return
+            resultado = buscar_aluno(matricula)
+            if resultado:
+                nome = resultado[0]
+            else:
+                try:
+                    inserir_aluno(matricula, nome, tipo="aluno")
+                except Exception as e:
+                    log.error("Falha ao inserir aluno: %s", e)
+                    self.status("Erro ao cadastrar aluno.", erro=True)
+                    return
         else:
             nome = resultado[0]
 
@@ -1223,14 +1265,16 @@ class App:
     def _tick_relogio(self):
         now = agora()
         self.lbl_clock.config(text=now.strftime("%H:%M"))
-        
-        # Daily auto-backup check
-        if now.hour >= 17:
-            today_str = now.strftime("%Y-%m-%d")
-            if self.config.get("ultimo_backup") != today_str:
+
+        today_str = now.strftime("%Y-%m-%d")
+        slots = self.config.get("backups_diarios", {})
+        for slot_hour, slot_key in [(12, "12"), (17, "17")]:
+            if now.hour >= slot_hour and slots.get(slot_key) != today_str:
                 executar_backup_diario()
-                self.config["ultimo_backup"] = today_str
-                mostrar_toast(self.root, "Backup diário automático realizado!")
+                slots[slot_key] = today_str
+                self.config["backups_diarios"] = slots
+                save_config(self.config)
+                mostrar_toast(self.root, f"Backup das {slot_key}h realizado!")
 
         self._relogio_job = self.root.after(1000, self._tick_relogio)
 
@@ -1437,23 +1481,30 @@ class App:
     # ── Verificações no startup ───────────────
 
     def _boot_checks(self):
-        self._verificar_export_pendente()
         self.root.after(400, self._verificar_orfaos)
 
     def _verificar_export_pendente(self):
         mes_ant = mes_anterior()
         if mes_ant in self.config["exported_months"]:
             return
-        if not buscar_export_mes(mes_ant):
+        dados = buscar_export_mes(mes_ant)
+        if not dados:
             return
-        if messagebox.askyesno("Export pendente",
-                f"O mês {mes_ant} ainda não foi exportado.\n\nExportar agora?",
-                parent=self.root):
-            self._exportar_mes(mes_ant)
+        self._exportar_mes_automatico(mes_ant, dados)
+
+    def _exportar_mes_automatico(self, mes: str, dados: list[tuple] | None = None):
+        if dados is None:
+            dados = buscar_export_mes(mes)
+        if not dados:
+            return
+        label = mes.replace("/", "_")
+        titulo = f"Mês {mes}"
+        self._fazer_export(dados, label, titulo, marcar_mes=mes, silencioso=True)
 
     def _verificar_orfaos(self):
         orfaos = buscar_registros_orfaos()
         if not orfaos:
+            self._verificar_export_pendente()
             self.root.after(400, self._verificar_novidades)
             return
         for r in orfaos:
@@ -1462,12 +1513,13 @@ class App:
         self._atualizar_lista()
         self.status(f"{len(orfaos)} registro(s) órfão(s) encerrado(s) automaticamente.")
         mostrar_toast(self.root, f"{len(orfaos)} registro(s) órfão(s) encerrado(s). Use Ctrl+Z para reverter.")
+        self._verificar_export_pendente()
         self.root.after(400, self._verificar_novidades)
 
     # ── Export ───────────────────────────────
 
     def _fazer_export(self, dados: list[tuple], label: str, titulo: str,
-                      marcar_mes: str | None = None):
+                      marcar_mes: str | None = None, silencioso: bool = False):
         if not dados:
             messagebox.showinfo("Exportar", f"Nenhum registro para {titulo}.", parent=self.root)
             return
@@ -1549,6 +1601,8 @@ class App:
         except Exception as e:
             log.error("Falha ao exportar: %s", e)
             self.status("Erro ao exportar.", erro=True)
+            if silencioso:
+                mostrar_toast(self.root, "Erro na exportação automática.")
             return
 
         if marcar_mes and marcar_mes not in self.config["exported_months"]:
@@ -1556,31 +1610,34 @@ class App:
             save_config(self.config)
 
         self.status(f"Exportado: {nome_arquivo}")
-        export_folder = os.path.dirname(os.path.abspath(caminho))
 
-        # Show success dialog with option to open folder
-        def abrir_pasta():
-            import subprocess
-            try:
-                subprocess.Popen(["xdg-open", export_folder])
-            except Exception:
-                pass
+        if silencioso:
+            mostrar_toast(self.root, f"Exportação automática: {nome_arquivo}")
+        else:
+            export_folder = os.path.dirname(os.path.abspath(caminho))
 
-        t = TEMAS["default"]
-        info_win = tk.Toplevel(self.root)
-        info_win.title("Exportado")
-        info_win.configure(bg=t["bg"])
-        setup_dialog(info_win, self.root, min_width=300, min_height=120, resizable=(False, False), escape_close=True)
+            def abrir_pasta():
+                import subprocess
+                try:
+                    subprocess.Popen(["xdg-open", export_folder])
+                except Exception:
+                    pass
 
-        tk.Label(info_win, text=f"Arquivo salvo:\n{nome_arquivo}", bg=t["bg"], fg=t["fg"],
-                 justify="center").pack(pady=10)
+            t = TEMAS["default"]
+            info_win = tk.Toplevel(self.root)
+            info_win.title("Exportado")
+            info_win.configure(bg=t["bg"])
+            setup_dialog(info_win, self.root, min_width=300, min_height=120, resizable=(False, False), escape_close=True)
 
-        btn_frame = tk.Frame(info_win, bg=t["bg"])
-        btn_frame.pack(pady=10)
-        tk.Button(btn_frame, text="Abrir Pasta", command=abrir_pasta,
-                  bg="#35383e", fg=t["fg"], bd=0, highlightthickness=0).pack(side="left", padx=5)
-        tk.Button(btn_frame, text="OK", command=info_win.destroy,
-                  bg="#35383e", fg=t["fg"], bd=0, highlightthickness=0).pack(side="left", padx=5)
+            tk.Label(info_win, text=f"Arquivo salvo:\n{nome_arquivo}", bg=t["bg"], fg=t["fg"],
+                     justify="center").pack(pady=10)
+
+            btn_frame = tk.Frame(info_win, bg=t["bg"])
+            btn_frame.pack(pady=10)
+            tk.Button(btn_frame, text="Abrir Pasta", command=abrir_pasta,
+                      bg="#35383e", fg=t["fg"], bd=0, highlightthickness=0).pack(side="left", padx=5)
+            tk.Button(btn_frame, text="OK", command=info_win.destroy,
+                      bg="#35383e", fg=t["fg"], bd=0, highlightthickness=0).pack(side="left", padx=5)
 
     def _handle_export_action(self, modo: str, periodo: str, mes_str: str = None):
         """Callback da janela unificada de exportação/cópia."""
