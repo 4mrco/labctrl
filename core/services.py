@@ -28,6 +28,8 @@ def load_config() -> dict:
     cfg = json.load(open(CONFIG_FILE, "r"))
     cfg.setdefault("exported_months", [])
     cfg.setdefault("ultimo_bolsista", None)
+    cfg.setdefault("modo_ui", "dashboard")
+    cfg.setdefault("kiosk_fullscreen", False)
     cfg.setdefault("open_export_folder", True)
     cfg.setdefault("escolher_maquina_entrada", False)
     cfg.setdefault("ultimo_backup", "")
@@ -345,3 +347,128 @@ def remover_registro(rid: int) -> dict:
     }
     db.deletar_registro(rid)
     return snapshot
+
+
+# ─────────────────────────────────────────────
+# SERVIÇO: BOOT OPERATIONS
+# ─────────────────────────────────────────────
+
+def run_boot_operations(config: dict) -> dict:
+    """
+    Executa as verificações de inicialização:
+    - Backups pendentes
+    - Órfãos auto-encerrados
+    - Exportação do mês anterior
+    - Verificação de relógio (comparação com último registro)
+    
+    Retorna um dicionário de resultados. A UI decide como exibir.
+    """
+    db = _get_db()
+    now = agora()
+    today_str = now.strftime("%Y-%m-%d")
+    results = {
+        "backups": [],
+        "orfaos": [],
+        "export": None,
+        "relogio": None
+    }
+    
+    # 1. Backups
+    slots = config.get("backups_diarios", {})
+    for slot_hour, slot_key in [(12, "12"), (17, "17")]:
+        if now.hour >= slot_hour and slots.get(slot_key) != today_str:
+            executar_backup_diario()
+            slots[slot_key] = today_str
+            results["backups"].append(slot_key)
+    config["backups_diarios"] = slots
+    
+    # 2. Órfãos
+    orfaos = db.buscar_registros_orfaos()
+    for r in orfaos:
+        rid, nome = r[0], r[1]
+        db.finalizar_registro(rid, None)
+        results["orfaos"].append({"tipo": "saida", "rid": rid, "nome": nome})
+        
+    # 3. Export Pendente
+    from core.services import mes_anterior
+    mes_ant = mes_anterior()
+    if mes_ant not in config.get("exported_months", []):
+        dados = db.buscar_registros_por_mes(mes_ant)
+        if dados:
+            # We don't write the CSV here to avoid UI duplication, or we write it here?
+            # The spec says it runs silently. Let's do the CSV logic here if it's not strictly UI.
+            # But the UI handles CSV writing in `_fazer_export` with stats. 
+            # We can return `mes_ant` and the dashboard writes it, or the kiosk does it.
+            # Wait, the kiosk needs to do it silently.
+            results["export"] = {"mes": mes_ant, "dados": dados}
+            
+    # 4. Relógio
+    reg = db.buscar_ultimo_registro()
+    if reg:
+        data_ant, entrada_ant = reg
+        try:
+            dt_ant = datetime.strptime(f"{data_ant} {entrada_ant}", "%d/%m/%Y %H:%M")
+            dt_novo = now.replace(second=0, microsecond=0)
+            if dt_novo < dt_ant - timedelta(minutes=5):
+                results["relogio"] = {"dt_ant": dt_ant, "dt_novo": dt_novo}
+        except Exception:
+            pass
+            
+    return results
+
+def finalizar_export_silencioso(mes: str, dados: list, config: dict):
+    from core.services import get_month_export_dir, calcular_estatisticas, agora
+    import csv, os
+    
+    stats = calcular_estatisticas(dados)
+    label = mes.replace("/", "_")
+    titulo = f"Mês {mes}"
+    nome_arquivo = f"lab_{label}.csv"
+    
+    if dados:
+        primeira_data = dados[0][0]
+        mes_pasta = primeira_data.split("/")[2] + "-" + primeira_data.split("/")[1]
+    else:
+        mes_pasta = agora().strftime("%Y-%m")
+        
+    month_dir = get_month_export_dir(mes_pasta)
+    caminho = os.path.join(month_dir, nome_arquivo)
+    
+    with open(caminho, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow([f"Relatório do Laboratório — {titulo}"])
+        w.writerow([
+            f"Total de visitas: {stats.get('total_visitas', 0)}",
+            f"Pessoas distintas: {stats.get('total_pessoas', 0)}",
+            f"Tempo total: {stats.get('tempo_total', '-')}",
+            f"Horário de pico: {stats.get('horario_pico', '-')}",
+            f"Dia mais movim.: {stats.get('dia_pico', '-')}",
+            f"Top 3 máquinas: {stats.get('top3_maquinas', '-')}",
+        ])
+        w.writerow([])
+        w.writerow(["Resumo por pessoa (blocos de 10)"])
+        
+        chunk = stats.get("visitas_por_pessoa", [])
+        cols = [chunk[i:i+10] for i in range(0, len(chunk), 10)]
+        header = []
+        for c in cols:
+            if c:
+                header.extend(["Nome (Matrícula)", "Visitas", "Tempo total", ""])
+        w.writerow(header)
+        
+        for row_idx in range(10):
+            row_data = []
+            for c in cols:
+                if c:
+                    if row_idx < len(c):
+                        pessoa, visitas = c[row_idx]
+                        tempo = stats.get("horas_por_pessoa", {}).get(pessoa, "-")
+                        row_data.extend([pessoa, visitas, tempo, ""])
+                    else:
+                        row_data.extend(["", "", "", ""])
+            if any(row_data):
+                w.writerow(row_data)
+                
+    if mes not in config["exported_months"]:
+        config["exported_months"].append(mes)
+        
