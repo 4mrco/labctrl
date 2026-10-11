@@ -400,10 +400,17 @@ def run_boot_operations(config: dict) -> dict:
     
     # 2. Órfãos
     orfaos = db.buscar_registros_orfaos()
+    orfaos_sem_saida = config.setdefault("orfaos_sem_saida", [])
     for r in orfaos:
         rid, nome = r[0], r[1]
+        matricula = r[2] if len(r) > 2 else ""
         db.finalizar_registro(rid, None)
-        results["orfaos"].append({"tipo": "saida", "rid": rid, "nome": nome})
+        results["orfaos"].append({"tipo": "saida", "rid": rid, "nome": nome, "matricula": matricula})
+        if matricula and matricula not in orfaos_sem_saida:
+            orfaos_sem_saida.append(matricula)
+    if orfaos:
+        config["orfaos_sem_saida"] = orfaos_sem_saida
+        save_config(config)
         
     # 3. Export Pendente
     from core.services import mes_anterior
