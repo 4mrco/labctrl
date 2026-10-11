@@ -61,7 +61,6 @@ from core.database import (
     buscar_ultimo_registro,
     contar_registros_hoje,
     contar_ativos,
-    buscar_maquinas_ocupadas,
     buscar_meses,
     buscar_export_mes,
     buscar_export_dia,
@@ -100,7 +99,6 @@ from ui.dialogs import (
     abrir_alunos, abrir_form_edicao, copiar_periodo,
     mostrar_toast, pedir_nome_com_matricula
 )
-from ui.mapa import selecionar_maquina
 
 # ─────────────────────────────────────────────
 # VERSION
@@ -949,8 +947,6 @@ class App:
         setup_dialog(win, self.root, min_width=450, min_height=250,
                      resizable=(False, False), escape_close=True)
 
-        var_mapa = tk.IntVar(value=int(self.config.get("escolher_maquina_entrada", False)))
-
         def forcar_backup():
             msg = executar_backup_diario()
             self.config["ultimo_backup"] = agora().strftime("%Y-%m-%d")
@@ -961,18 +957,12 @@ class App:
         grid_frame = tk.Frame(win, bg=bg)
         grid_frame.pack(fill="both", expand=True, padx=20, pady=15)
         
-        # Row 1: Escolher Máquina
+        # Row 1: Confirmar Saída
+        var_confirma = tk.BooleanVar(value=bool(self.config.get("confirmar_saida", True)))
         r1 = tk.Frame(grid_frame, bg=bg)
         r1.pack(fill="x", pady=5)
-        tk.Label(r1, text="Escolher Máquina na Entrada", bg=bg, fg=fg, font=("Arial", 10), anchor="w").pack(side="left")
-        tk.Checkbutton(r1, variable=var_mapa, bd=0, highlightthickness=0, bg=bg, selectcolor=select, activebackground=bg).pack(side="right")
-        
-        # Row 1b: Confirmar Saída
-        var_confirma = tk.BooleanVar(value=bool(self.config.get("confirmar_saida", True)))
-        r1b = tk.Frame(grid_frame, bg=bg)
-        r1b.pack(fill="x", pady=5)
-        tk.Label(r1b, text="Confirmar saída de usuário (popup)", bg=bg, fg=fg, font=("Arial", 10), anchor="w").pack(side="left")
-        tk.Checkbutton(r1b, variable=var_confirma, bd=0, highlightthickness=0, bg=bg, selectcolor=select, activebackground=bg).pack(side="right")
+        tk.Label(r1, text="Confirmar saída de usuário (popup)", bg=bg, fg=fg, font=("Arial", 10), anchor="w").pack(side="left")
+        tk.Checkbutton(r1, variable=var_confirma, bd=0, highlightthickness=0, bg=bg, selectcolor=select, activebackground=bg).pack(side="right")
         
         # Separator
         tk.Frame(grid_frame, bg="#444", height=1).pack(fill="x", pady=10)
@@ -999,7 +989,7 @@ class App:
         tk.Button(r4, text="GERAR AGORA", command=forcar_backup, bd=0, bg=field, fg=fg, padx=15, pady=4).pack(side="right")
         
         def salvar():
-            self.config["escolher_maquina_entrada"] = bool(var_mapa.get())
+            self.config.pop("escolher_maquina_entrada", None)
             self.config["confirmar_saida"] = var_confirma.get()
             save_config(self.config)
             win.destroy()
@@ -1058,26 +1048,8 @@ class App:
         if not self._verificar_relogio():
             return False
 
-        # User is entering — determine machine: map dialog or combobox
-        # CANCEL any pending _from_dialog polling so it doesn't fire while the map is opening
-        if getattr(self, "_from_dialog_job", None):
-            self.root.after_cancel(self._from_dialog_job)
-            self._from_dialog_job = None
-
-        if self.config.get("escolher_maquina_entrada"):
-            ocupadas = buscar_maquinas_ocupadas()
-            maquina_real = selecionar_maquina(self.root, ocupadas)
-            if maquina_real is None:
-                return False  # user cancelled
-                
-            # Mask UI combobox for display but retain internal ML-X
-            if maquina_real == "-":
-                self.combo_maquina.set("-")
-            else:
-                maq_exib = "ML" if str(maquina_real).startswith("ML-") else maquina_real
-                self.combo_maquina.set(maq_exib)
-        else:
-            maquina_real = self.combo_maquina.get()
+        # User is entering — determine machine from combobox
+        maquina_real = self.combo_maquina.get()
 
         try:
             resultado = processar_entrada(

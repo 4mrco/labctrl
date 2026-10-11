@@ -23,13 +23,15 @@ def load_config() -> dict:
         return {
             "exported_months": [], "ultimo_bolsista": None, 
             "open_export_folder": True, "escolher_maquina_entrada": False,
-            "ultimo_backup": "", "versao_registrada": "", "popup_expira_em": ""
+            "ultimo_backup": "", "versao_registrada": "", "popup_expira_em": "",
+            "layout": "lab_informatica"
         }
     cfg = json.load(open(CONFIG_FILE, "r"))
     cfg.setdefault("exported_months", [])
     cfg.setdefault("ultimo_bolsista", None)
     cfg.setdefault("modo_ui", "dashboard")
     cfg.setdefault("kiosk_fullscreen", False)
+    cfg.setdefault("layout", "lab_informatica")
     cfg.setdefault("open_export_folder", True)
     cfg.setdefault("escolher_maquina_entrada", False)
     cfg.setdefault("ultimo_backup", "")
@@ -44,6 +46,20 @@ def load_config() -> dict:
 
 def save_config(cfg: dict) -> None:
     json.dump(cfg, open(CONFIG_FILE, "w"))
+
+
+def load_layout(name: str = "lab_informatica") -> dict:
+    """Carrega e valida os dados de planta física de um laboratório a partir de layouts/<name>.json."""
+    layout_path = os.path.join(BASE_DIR, "layouts", f"{name}.json")
+    if not os.path.isfile(layout_path):
+        raise FileNotFoundError(f"Arquivo de layout não encontrado: {layout_path}")
+    with open(layout_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    required_keys = {"width", "height", "table_size", "tables", "desk_poly", "bolsista_pos", "pcs", "ml_slots"}
+    missing = required_keys - set(data.keys())
+    if missing:
+        raise ValueError(f"Layout '{name}' malformado. Chaves ausentes: {', '.join(sorted(missing))}")
+    return data
 
 
 def get_export_dir() -> str:
