@@ -55,15 +55,18 @@ python3 app.py
 
 ```text
 labctrl/
-├── app.py              # Entrypoint e orquestrador principal
-├── core/               # Lógica de Negócios e Dados
-│   ├── config.py       # Configurações globais, constantes e tema
-│   ├── database.py     # Transações SQLite e auto-recuperação
-│   └── services.py     # Histórico, Undo Stack e formatação
-├── ui/                 # Interface Gráfica (Tkinter)
-│   ├── app_window.py   # Janela principal, event loop e binds
-│   └── dialogs.py      # Popups, formulários e dashboard
-└── hardware/           # Coming soon (integração com leitor RFID)
+├── app.py                 # Entrypoint, orquestrador de modos (Kiosk/Dashboard) e boot silencioso
+├── core/                  # Lógica de Negócios e Persistência
+│   ├── config.py          # Configurações globais, variáveis de ambiente e tema
+│   ├── database.py        # Transações SQLite, conexões seguras e auto-recuperação
+│   └── services.py        # I/O atômico, backups automáticos, motor de exportação e gestão de layouts
+├── layouts/               # Plantas Físicas e Topologia
+│   └── *.json             # Definição estruturada do mapa (hitboxes, mesas e slots) desacoplada da UI
+├── ui/                    # Interface Gráfica (Tkinter)
+│   ├── app_window.py      # Dashboard do bolsista, event loop e registro manual
+│   ├── dialogs.py         # Popups modais, formulários de edição e alertas
+│   └── kiosk.py           # Totem de autoatendimento, mapa interativo canônico e timeout de sessão
+└── hardware/              # Coming soon (integração com leitor RFID)
 ```
 
 ## Roadmap
