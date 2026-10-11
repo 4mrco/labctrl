@@ -61,7 +61,6 @@ from core.database import (
     buscar_ultimo_registro,
     contar_registros_hoje,
     contar_ativos,
-    buscar_maquinas_ocupadas,
     buscar_meses,
     buscar_export_mes,
     buscar_export_dia,
@@ -100,12 +99,11 @@ from ui.dialogs import (
     abrir_alunos, abrir_form_edicao, copiar_periodo,
     mostrar_toast, pedir_nome_com_matricula
 )
-from ui.mapa import selecionar_maquina
 
 # ─────────────────────────────────────────────
 # VERSION
 # ─────────────────────────────────────────────
-VERSAO_ATUAL = "1.2.3"
+VERSAO_ATUAL = "1.3.1"
 
 
 
@@ -115,7 +113,8 @@ VERSAO_ATUAL = "1.2.3"
 # ─────────────────────────────────────────────
 
 class App:
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk, on_switch_mode=None):
+        self.on_switch_mode = on_switch_mode
         self.root = root
         self.root.title("")
         self.root.minsize(820, 400)
@@ -152,20 +151,7 @@ class App:
         self.root._from_dialog = self._from_dialog
         
         
-        # Per-slot backup catch-up (today only, no backlog for missed days)
-        try:
-            today_str = date.today().strftime("%Y-%m-%d")
-            now = datetime.now()
-            slots = self.config.get("backups_diarios", {})
-            for slot_hour, slot_key in [(12, "12"), (17, "17")]:
-                if now.hour >= slot_hour and slots.get(slot_key) != today_str:
-                    executar_backup_diario()
-                    slots[slot_key] = today_str
-                    self.config["backups_diarios"] = slots
-                    save_config(self.config)
-                    mostrar_toast(self.root, f"Backup das {slot_key}h em atraso realizado!")
-        except Exception:
-            pass
+
 
         # Serialized boot checks to avoid overlapping grabs
         self.root.after(500, self._boot_checks)
@@ -250,7 +236,30 @@ class App:
 
         # Header title
         self.lbl_title = tk.Label(self.header, text="LabCTRL", font=("Segoe UI", 12, "bold"))
-        self.lbl_title.pack(side="left", padx=12)
+        self.lbl_title.pack(side="left", padx=(12, 4))
+
+        self.btn_switch = tk.Button(self.header, text="⇋ Kiosk", command=self.on_switch_mode, cursor="hand2", font=("Segoe UI", 9, "bold"), bd=0, highlightthickness=0)
+        if self.on_switch_mode:
+            self.btn_switch.pack(side="left", padx=4)
+
+        # ── Tooltip Switch ───────────────────────
+        if self.on_switch_mode:
+            self._switch_tooltip = None
+            def _show_sw_tip(e):
+                _hide_sw_tip()
+                self._switch_tooltip = tk.Toplevel(self.root)
+                self._switch_tooltip.overrideredirect(True)
+                self._switch_tooltip.attributes("-topmost", True)
+                tk.Label(self._switch_tooltip, text="Mudar para interface de totem",
+                         bg="#333", fg="#FFF", font=("Segoe UI", 9), padx=6, pady=3).pack()
+                self._switch_tooltip.geometry(f"+{e.x_root + 10}+{e.y_root + 10}")
+            def _hide_sw_tip(e=None):
+                if getattr(self, "_switch_tooltip", None):
+                    self._switch_tooltip.destroy()
+                    self._switch_tooltip = None
+            self.btn_switch.bind("<Enter>", _show_sw_tip)
+            self.btn_switch.bind("<Leave>", _hide_sw_tip)
+            self.btn_switch.bind("<Button-1>", _hide_sw_tip)
 
         # Separator line
         self.sep_header = tk.Frame(self.root, height=1)
@@ -938,8 +947,6 @@ class App:
         setup_dialog(win, self.root, min_width=450, min_height=250,
                      resizable=(False, False), escape_close=True)
 
-        var_mapa = tk.IntVar(value=int(self.config.get("escolher_maquina_entrada", False)))
-
         def forcar_backup():
             msg = executar_backup_diario()
             self.config["ultimo_backup"] = agora().strftime("%Y-%m-%d")
@@ -950,18 +957,12 @@ class App:
         grid_frame = tk.Frame(win, bg=bg)
         grid_frame.pack(fill="both", expand=True, padx=20, pady=15)
         
-        # Row 1: Escolher Máquina
+        # Row 1: Confirmar Saída
+        var_confirma = tk.BooleanVar(value=bool(self.config.get("confirmar_saida", True)))
         r1 = tk.Frame(grid_frame, bg=bg)
         r1.pack(fill="x", pady=5)
-        tk.Label(r1, text="Escolher Máquina na Entrada", bg=bg, fg=fg, font=("Arial", 10), anchor="w").pack(side="left")
-        tk.Checkbutton(r1, variable=var_mapa, bd=0, highlightthickness=0, bg=bg, selectcolor=select, activebackground=bg).pack(side="right")
-        
-        # Row 1b: Confirmar Saída
-        var_confirma = tk.BooleanVar(value=bool(self.config.get("confirmar_saida", True)))
-        r1b = tk.Frame(grid_frame, bg=bg)
-        r1b.pack(fill="x", pady=5)
-        tk.Label(r1b, text="Confirmar saída de usuário (popup)", bg=bg, fg=fg, font=("Arial", 10), anchor="w").pack(side="left")
-        tk.Checkbutton(r1b, variable=var_confirma, bd=0, highlightthickness=0, bg=bg, selectcolor=select, activebackground=bg).pack(side="right")
+        tk.Label(r1, text="Confirmar saída de usuário (popup)", bg=bg, fg=fg, font=("Arial", 10), anchor="w").pack(side="left")
+        tk.Checkbutton(r1, variable=var_confirma, bd=0, highlightthickness=0, bg=bg, selectcolor=select, activebackground=bg).pack(side="right")
         
         # Separator
         tk.Frame(grid_frame, bg="#444", height=1).pack(fill="x", pady=10)
@@ -988,7 +989,7 @@ class App:
         tk.Button(r4, text="GERAR AGORA", command=forcar_backup, bd=0, bg=field, fg=fg, padx=15, pady=4).pack(side="right")
         
         def salvar():
-            self.config["escolher_maquina_entrada"] = bool(var_mapa.get())
+            self.config.pop("escolher_maquina_entrada", None)
             self.config["confirmar_saida"] = var_confirma.get()
             save_config(self.config)
             win.destroy()
@@ -1047,26 +1048,8 @@ class App:
         if not self._verificar_relogio():
             return False
 
-        # User is entering — determine machine: map dialog or combobox
-        # CANCEL any pending _from_dialog polling so it doesn't fire while the map is opening
-        if getattr(self, "_from_dialog_job", None):
-            self.root.after_cancel(self._from_dialog_job)
-            self._from_dialog_job = None
-
-        if self.config.get("escolher_maquina_entrada"):
-            ocupadas = buscar_maquinas_ocupadas()
-            maquina_real = selecionar_maquina(self.root, ocupadas)
-            if maquina_real is None:
-                return False  # user cancelled
-                
-            # Mask UI combobox for display but retain internal ML-X
-            if maquina_real == "-":
-                self.combo_maquina.set("-")
-            else:
-                maq_exib = "ML" if str(maquina_real).startswith("ML-") else maquina_real
-                self.combo_maquina.set(maq_exib)
-        else:
-            maquina_real = self.combo_maquina.get()
+        # User is entering — determine machine from combobox
+        maquina_real = self.combo_maquina.get()
 
         try:
             resultado = processar_entrada(
@@ -1481,40 +1464,27 @@ class App:
     # ── Verificações no startup ───────────────
 
     def _boot_checks(self):
-        self.root.after(400, self._verificar_orfaos)
-
-    def _verificar_export_pendente(self):
-        mes_ant = mes_anterior()
-        if mes_ant in self.config["exported_months"]:
-            return
-        dados = buscar_export_mes(mes_ant)
-        if not dados:
-            return
-        self._exportar_mes_automatico(mes_ant, dados)
-
-    def _exportar_mes_automatico(self, mes: str, dados: list[tuple] | None = None):
-        if dados is None:
-            dados = buscar_export_mes(mes)
-        if not dados:
-            return
-        label = mes.replace("/", "_")
-        titulo = f"Mês {mes}"
-        self._fazer_export(dados, label, titulo, marcar_mes=mes, silencioso=True)
-
-    def _verificar_orfaos(self):
-        orfaos = buscar_registros_orfaos()
-        if not orfaos:
-            self._verificar_export_pendente()
-            self.root.after(400, self._verificar_novidades)
-            return
-        for r in orfaos:
-            finalizar_registro(r[0], None)
-            self._push_undo({"tipo": "saida", "rid": r[0], "nome": r[1]})
-        self._atualizar_lista()
-        self.status(f"{len(orfaos)} registro(s) órfão(s) encerrado(s) automaticamente.")
-        mostrar_toast(self.root, f"{len(orfaos)} registro(s) órfão(s) encerrado(s). Use Ctrl+Z para reverter.")
-        self._verificar_export_pendente()
+        from core.services import run_boot_operations, finalizar_export_silencioso
+        res = run_boot_operations(self.config)
+        
+        if res.get("export"):
+            finalizar_export_silencioso(res["export"]["mes"], res["export"]["dados"], self.config)
+            from core.services import save_config
+            save_config(self.config)
+            
+        if res.get("orfaos"):
+            for r in res["orfaos"]:
+                self._push_undo(r)
+            self._atualizar_lista()
+            self.status(f"{len(res['orfaos'])} registro(s) órfão(s) encerrado(s) automaticamente.")
+            mostrar_toast(self.root, f"{len(res['orfaos'])} registro(s) órfão(s) encerrado(s). Use Ctrl+Z para reverter.")
+            
+        # Backups
+        for b in res.get("backups", []):
+            mostrar_toast(self.root, f"Backup das {b}h realizado!")
+            
         self.root.after(400, self._verificar_novidades)
+
 
     # ── Export ───────────────────────────────
 
@@ -1696,3 +1666,12 @@ class App:
         self._abrir_form_edicao_wrapper(rid)
 
 
+
+    def destroy(self):
+        for job in ["_status_job", "_relogio_job", "_from_dialog_job"]:
+            job_id = getattr(self, job, None)
+            if job_id:
+                try:
+                    self.root.after_cancel(job_id)
+                except tk.TclError:
+                    pass
