@@ -26,7 +26,7 @@ from core.database import (
 )
 from core.services import (
     agora, gerar_id_servidor, load_config, load_layout, normalizar_nome,
-    processar_entrada, reverter_acao,
+    processar_entrada, reverter_acao, save_config,
 )
 from ui.dialogs import popup_sem_matricula, abrir_form_edicao
 
@@ -163,6 +163,7 @@ class KioskFrame(tk.Frame):
         self._map_t = 0.0
         self._awaiting_ready_ts = 0.0                     # 0 = dim (repouso) … 1 = cor plena
         self._map_job = None
+        self._orphan_warn_job = None
         self._slot_h = 0
         self._slot_job = None
         self._top_binds: list[tuple[str, str]] = []
@@ -173,12 +174,15 @@ class KioskFrame(tk.Frame):
         self._tick_clock()
         self._refresh_map()
         self._focus_entry()
+        self.after(150, self._focus_entry)
+        self.after(400, self._focus_entry)
 
         top = self.winfo_toplevel()
         for seq, handler in (("<Key>", self._on_key),
                              ("<Control-z>", self._desfazer),
                              ("<Control-Z>", self._desfazer)):
             self._top_binds.append((seq, top.bind(seq, handler, add="+")))
+        top.bind("<FocusIn>", lambda e: self._focus_entry() if self._state == IDLE else None, add="+")
         # setup_dialog() chama parent._from_dialog() ao fechar modais; só define se
         # a janela hospedeira (ex.: App) ainda não expôs o seu.
         if not hasattr(top, "_from_dialog"):
@@ -286,6 +290,8 @@ class KioskFrame(tk.Frame):
         self._entry.bind("<Return>", self._on_matricula_enter)
         self._entry.bind("<KP_Enter>", self._on_matricula_enter)
         self._entry.bind("<KeyRelease>", self._on_matricula_edited)
+        self._entry.bind("<Button-1>", self._on_entry_click, add="+")
+        self._entry.bind("<BackSpace>", self._on_entry_backspace)
 
         # Slot inline (altura animada 0 → SLOT_H): nome do aluno novo OU confirmação de saída
         self._slot_box = tk.Frame(top, bg=BG, height=0)
@@ -302,6 +308,7 @@ class KioskFrame(tk.Frame):
         self._name_entry.pack(side="left", padx=(12, 12), ipady=5)
         self._name_entry.bind("<Return>", lambda e: [self._on_name_saved(), "break"][1])
         self._name_entry.bind("<KP_Enter>", lambda e: [self._on_name_saved(), "break"][1])
+        self._name_entry.bind("<BackSpace>", self._on_name_backspace)
         self._btn_name = self._make_button(self._name_inner, "Salvar", self._on_name_saved,
                                            width=8, pady=6)
         self._btn_name.pack(side="left")
@@ -309,7 +316,7 @@ class KioskFrame(tk.Frame):
         self._panel_inner = tk.Frame(self._slot_box, bg=BG)
 
         # Feedback (largura fixa, centralizado, com fundo) — acima do mapa
-        self._lbl_feedback = tk.Label(top, text="", width=62, bg=FIELD, fg=TXT_SEC,
+        self._lbl_feedback = tk.Label(top, text="", width=70, bg=FIELD, fg=TXT_SEC,
                                       font=self._f(14, "bold"), pady=8)
         self._lbl_feedback.pack(pady=(8, 0))
         self._render_feedback()
@@ -391,7 +398,8 @@ class KioskFrame(tk.Frame):
             text = f"{text}   •   {remaining}s"
             kind = "warn"
         bg, fg = FB_STYLES[kind]
-        self._lbl_feedback.config(text=text, bg=bg, fg=fg)
+        f_size = 12 if len(text) > 50 else 14
+        self._lbl_feedback.config(text=text, bg=bg, fg=fg, font=self._f(f_size, "bold"))
 
     def _set_feedback(self, text, kind="idle"):
         if self._flash_job:
@@ -462,10 +470,60 @@ class KioskFrame(tk.Frame):
             self.after_idle(self._on_matricula_submitted)
         return True
 
+    def _on_entry_click(self, event=None):
+        if self._state == PANEL:
+            self._reset()
+        elif self._state == NAME:
+            self._animate_slot(0)
+            self._pending = None
+            self._set_state(IDLE)
+            self._set_feedback(IDLE_MSG, "idle")
+        self._entry.config(state="normal")
+        self._entry.focus_set()
+
+    def _on_entry_backspace(self, event=None):
+        if self._state == AWAITING:
+            self._handle_awaiting_backspace()
+            return "break"
+        return None
+
+    def _on_name_backspace(self, event=None):
+        val = self._name_entry.get()
+        if not val or self._name_entry.index("insert") == 0:
+            self._animate_slot(0)
+            self._pending = None
+            self._set_state(IDLE)
+            self._set_feedback(IDLE_MSG, "idle")
+            self._entry.config(state="normal")
+            mat = self._entry.get()
+            if mat:
+                self._entry.delete(len(mat) - 1, "end")
+            self._entry.focus_set()
+            self._entry.icursor("end")
+            return "break"
+        return None
+
+    def _handle_awaiting_backspace(self):
+        if getattr(self, "_orphan_warn_job", None):
+            self.after_cancel(self._orphan_warn_job)
+            self._orphan_warn_job = None
+        self._stop_deadline()
+        self._pending = None
+        self._set_state(IDLE)
+        self._set_feedback(IDLE_MSG, "idle")
+        mat = self._entry.get()
+        if len(mat) == 6:
+            self._entry.delete(len(mat) - 1, "end")
+        self._entry.focus_set()
+        self._entry.icursor("end")
+
     def _on_matricula_edited(self, event=None):
         if self._state in (NAME, AWAITING) and self._pending:
             mat = self._entry.get().strip()
             if mat == self._pending.get("matricula"):
+                return
+            if len(mat) < 6 and self._state == AWAITING:
+                self._handle_awaiting_backspace()
                 return
             self._pending["matricula"] = mat
             if len(mat) == 6:
@@ -960,7 +1018,21 @@ class KioskFrame(tk.Frame):
             msg = f"Matrícula identificada: {p['nome']}. Escolha o local."
         else:
             msg = f"Olá, {p['nome']}! Escolha o local."
-        self._set_feedback(msg, "active")
+
+        cfg = load_config()
+        orfaos = cfg.get("orfaos_sem_saida", [])
+        if p.get("matricula") and p["matricula"] in orfaos:
+            self._set_feedback("Atenção: você não registrou saída da última vez. Lembre-se ao sair!", "warn")
+            def _restore_msg():
+                self._orphan_warn_job = None
+                if self._state == AWAITING:
+                    self._set_feedback(msg, "active")
+            if getattr(self, "_orphan_warn_job", None):
+                self.after_cancel(self._orphan_warn_job)
+            self._orphan_warn_job = self.after(3000, _restore_msg)
+        else:
+            self._set_feedback(msg, "active")
+
         self._start_deadline(lambda: self._on_machine_selected(SEM_MAQUINA))
 
     def _sem_maquina(self):
@@ -979,9 +1051,12 @@ class KioskFrame(tk.Frame):
                 self._open_occupant_panel(label)
 
     def _on_key(self, event):
-        """Atalhos (somente AWAITING): M/L → mesa livre."""
+        """Atalhos (somente AWAITING): M/L → mesa livre, 1-9 → PC, BackSpace → volta para IDLE."""
         if self._state != AWAITING:
             return
+        if event.keysym == "BackSpace":
+            self._handle_awaiting_backspace()
+            return "break"
         ch = (event.char or "").upper()
         if ch in ("M", "L"):
             livre = next((s for s in ML_SLOTS if s not in self._occupants), "ML")
@@ -1010,6 +1085,13 @@ class KioskFrame(tk.Frame):
                 self._toast(f"{p['nome']} já está dentro do laboratório.", "error")
             else:
                 self._push_undo({"tipo": "entrada", "rid": res["rid"], "nome": p["nome"]})
+                if p.get("matricula"):
+                    cfg = load_config()
+                    orfaos = cfg.get("orfaos_sem_saida", [])
+                    if p["matricula"] in orfaos:
+                        orfaos.remove(p["matricula"])
+                        cfg["orfaos_sem_saida"] = orfaos
+                        save_config(cfg)
                 destino = "sem máquina" if machine == SEM_MAQUINA else (
                     "Mesa Livre" if machine.startswith("ML") else f"PC {machine}")
                 self._toast(f"Entrada registrada: {p['nome']} ({destino}) às {res['hora']}")
@@ -1103,6 +1185,9 @@ class KioskFrame(tk.Frame):
 
     def _reset(self):
         """Volta ao repouso: limpa campos, estado, timers e foco."""
+        if getattr(self, "_orphan_warn_job", None):
+            self.after_cancel(self._orphan_warn_job)
+            self._orphan_warn_job = None
         self._stop_deadline()
         self._on_expire = None
         self._pending = None
@@ -1121,7 +1206,8 @@ class KioskFrame(tk.Frame):
 
     def destroy(self):
         for name in ("_clock_job", "_deadline_job", "_flash_job", "_refresh_job",
-                     "_toast_job", "_map_job", "_slot_job", "_focus_job", "_undo_job"):
+                     "_toast_job", "_map_job", "_slot_job", "_focus_job", "_undo_job",
+                     "_orphan_warn_job"):
             job = getattr(self, name, None)
             if job:
                 try:
