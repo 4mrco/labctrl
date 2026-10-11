@@ -1,7 +1,7 @@
 import argparse
 import tkinter as tk
 from core.database import init_db
-from core.services import load_config, save_config, run_boot_operations
+from core.services import load_config, save_config, run_boot_operations, finalizar_export_silencioso
 
 class AppController:
     def __init__(self, root, initial_mode):
@@ -74,6 +74,9 @@ class AppController:
             
     def run_boot_silently(self):
         self.boot_results = run_boot_operations(self.config)
+        if self.boot_results.get("export"):
+            finalizar_export_silencioso(self.boot_results["export"]["mes"], self.boot_results["export"]["dados"], self.config)
+            save_config(self.config)
         self.boot_completed = True
         
     def setup_dashboard(self):
