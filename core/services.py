@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import shutil
@@ -18,34 +19,56 @@ def _get_db():
     return db
 
 
-def load_config() -> dict:
-    if not os.path.exists(CONFIG_FILE):
-        return {
-            "exported_months": [], "ultimo_bolsista": None, 
-            "open_export_folder": True, "escolher_maquina_entrada": False,
-            "ultimo_backup": "", "versao_registrada": "", "popup_expira_em": "",
-            "layout": "lab_informatica"
-        }
-    cfg = json.load(open(CONFIG_FILE, "r"))
-    cfg.setdefault("exported_months", [])
-    cfg.setdefault("ultimo_bolsista", None)
-    cfg.setdefault("modo_ui", "dashboard")
-    cfg.setdefault("kiosk_fullscreen", False)
-    cfg.setdefault("layout", "lab_informatica")
-    cfg.setdefault("open_export_folder", True)
-    cfg.setdefault("escolher_maquina_entrada", False)
-    cfg.setdefault("ultimo_backup", "")
-    cfg.setdefault("versao_registrada", "")
-    cfg.setdefault("popup_expira_em", "")
-    cfg.setdefault("confirmar_saida", True)
-    if "backups_diarios" not in cfg:
-        legacy = cfg.get("ultimo_backup", "")
-        cfg["backups_diarios"] = {"12": legacy, "17": legacy} if legacy else {}
-    return cfg
+DEFAULT_CONFIG = {
+    "exported_months": [],
+    "ultimo_bolsista": None,
+    "modo_ui": "dashboard",
+    "kiosk_fullscreen": False,
+    "layout": "lab_informatica",
+    "open_export_folder": True,
+    "escolher_maquina_entrada": False,
+    "ultimo_backup": "",
+    "versao_registrada": "",
+    "popup_expira_em": "",
+    "confirmar_saida": True,
+    "backups_diarios": {},
+    "orfaos_sem_saida": [],
+}
 
 
 def save_config(cfg: dict) -> None:
-    json.dump(cfg, open(CONFIG_FILE, "w"))
+    tmp_file = f"{CONFIG_FILE}.tmp"
+    with open(tmp_file, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_file, CONFIG_FILE)
+
+
+def load_config() -> dict:
+    default = copy.deepcopy(DEFAULT_CONFIG)
+    if not os.path.exists(CONFIG_FILE) or os.path.getsize(CONFIG_FILE) == 0:
+        save_config(default)
+        return default
+
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        if not isinstance(cfg, dict):
+            raise ValueError("Config root is not a dictionary")
+    except Exception:
+        save_config(default)
+        return default
+
+    for k, v in DEFAULT_CONFIG.items():
+        if k not in cfg:
+            cfg[k] = copy.deepcopy(v)
+
+    if "backups_diarios" not in cfg or not isinstance(cfg["backups_diarios"], dict):
+        legacy = cfg.get("ultimo_backup", "")
+        cfg["backups_diarios"] = {"12": legacy, "17": legacy} if legacy else {}
+
+    return cfg
 
 
 def load_layout(name: str = "lab_informatica") -> dict:
@@ -416,7 +439,7 @@ def run_boot_operations(config: dict) -> dict:
     from core.services import mes_anterior
     mes_ant = mes_anterior()
     if mes_ant not in config.get("exported_months", []):
-        dados = db.buscar_registros_por_mes(mes_ant)
+        dados = db.buscar_export_mes(mes_ant)
         if dados:
             # We don't write the CSV here to avoid UI duplication, or we write it here?
             # The spec says it runs silently. Let's do the CSV logic here if it's not strictly UI.

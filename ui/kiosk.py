@@ -519,8 +519,11 @@ class KioskFrame(tk.Frame):
 
     def _on_matricula_edited(self, event=None):
         if self._state in (NAME, AWAITING) and self._pending:
+            p_mat = self._pending.get("matricula")
+            if not p_mat or not str(p_mat).isdigit():
+                return
             mat = self._entry.get().strip()
-            if mat == self._pending.get("matricula"):
+            if mat == p_mat:
                 return
             if len(mat) < 6 and self._state == AWAITING:
                 self._handle_awaiting_backspace()

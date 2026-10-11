@@ -387,9 +387,10 @@ def popup_sem_matricula(parent: tk.Tk | tk.Toplevel) -> tuple[str, str] | None:
     def confirmar(event=None):
         nome = entry_nome.get().strip()
         if not nome:
-            return
+            return "break"
         resultado["valor"] = (nome, var_tipo.get())
         win.destroy()
+        return "break"
 
     entry_nome.bind("<Return>", confirmar)
     win.bind("<Return>", confirmar)
