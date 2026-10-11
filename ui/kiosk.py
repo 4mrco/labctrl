@@ -8,7 +8,7 @@ confirmação inline. Aluno desconhecido informa o nome inline (sem modal) e
 quem não tem matrícula usa o botão "Sem matrícula" (Aluno / Servidor).
 
 Camada de UI pura: regras de negócio vêm de `core.services`, persistência de
-`core.database`, geometria/cores do mapa de `ui.mapa`. Spec de referência:
+`core.database`, geometria/cores do mapa canônicas do próprio Kiosk. Spec de referência:
 kiosk-design-clean.md (sobrescrita: nome inline em vez de modal).
 
 Executar a partir da raiz do projeto:  python3 -m ui.kiosk
@@ -25,14 +25,24 @@ from core.database import (
     buscar_registros_por_mes, finalizar_registro, inserir_aluno,
 )
 from core.services import (
-    agora, gerar_id_servidor, load_config, normalizar_nome,
+    agora, gerar_id_servidor, load_config, load_layout, normalizar_nome,
     processar_entrada, reverter_acao,
 )
 from ui.dialogs import popup_sem_matricula, abrir_form_edicao
-from ui.mapa import (
-    CW, CH, TIMEOUT_MS, PC_R, ML_SLOT_R, PC_FREE, PC_OCCUPIED, ML_FREE,
-    ML_OCCUPIED, PC_FREE_RING, ML_FREE_RING, BOLS_CLR, HOVER, DESK_CLR,
-)
+
+# ── Map Active Palette & Constants (Kiosk Canonical) ─────────────────────
+PC_FREE       = "#1E4D8C"
+PC_OCCUPIED   = "#1A1A2E"
+ML_FREE       = "#1A6B3C"
+ML_OCCUPIED   = "#0F2218"
+PC_FREE_RING  = "#5B9BD5"
+ML_FREE_RING  = "#4EC97B"
+BOLS_CLR      = "#1e2b3c"
+HOVER         = "#3A5F9A"
+DESK_CLR      = "#444444"
+
+MACHINE_R     = 20
+IDLE_TIMEOUT_S = 60
 
 # ── Theme ─────────────────────────────────────────────────────────────────
 _T = TEMAS["default"]
@@ -76,23 +86,19 @@ STEP_NAMES = ("Matrícula", "Nome", "Local")
 DIAS = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira",
         "Sexta-feira", "Sábado", "Domingo"]
 
-# Geometria: mesmas coordenadas de mapa.DialogoSelecaoMapa._draw_map, escaladas 1.1x
+# ── Planta Física (Carregada via layouts/<layout>.json e escalada 1.1x) ──
+_LAYOUT_NAME = load_config().get("layout", "lab_informatica")
+_LAYOUT = load_layout(_LAYOUT_NAME)
 _S = 1.1
-CANVAS_W, CANVAS_H = int(CW * _S), int(CH * _S)
-TABLES = [(int(x * _S), int(y * _S)) for x, y in [(69, 145), (69, 272), (69, 398), (437, 145), (437, 272), (437, 398)]]
-TABLE_W, TABLE_H = int(276 * _S), int(86 * _S)
-DESK_POLY = tuple(int(v * _S) for v in (663, 5, 713, 5, 713, 90, 543, 90, 543, 40, 663, 40))
-BOLSISTA_POS = (int(638 * _S), int(65 * _S))
-PCS = {
-    "04": (int(115 * _S), int(300 * _S)), "05": (int(207 * _S), int(300 * _S)), "06": (int(299 * _S), int(300 * _S)),
-    "10": (int(115 * _S), int(427 * _S)), "11": (int(207 * _S), int(427 * _S)), "12": (int(299 * _S), int(427 * _S)),
-    "01": (int(483 * _S), int(174 * _S)), "02": (int(575 * _S), int(174 * _S)), "03": (int(667 * _S), int(174 * _S)),
-    "07": (int(483 * _S), int(427 * _S)), "08": (int(575 * _S), int(427 * _S)), "09": (int(667 * _S), int(427 * _S)),
-}
-ML_SLOTS = {
-    "ML-1": (int(115 * _S), int(174 * _S)), "ML-2": (int(207 * _S), int(174 * _S)), "ML-3": (int(299 * _S), int(174 * _S)),
-    "ML-4": (int(483 * _S), int(300 * _S)), "ML-5": (int(575 * _S), int(300 * _S)), "ML-6": (int(667 * _S), int(300 * _S)),
-}
+CANVAS_W = int(_LAYOUT["width"] * _S)
+CANVAS_H = int(_LAYOUT["height"] * _S)
+_tw, _th = _LAYOUT["table_size"]
+TABLE_W, TABLE_H = int(_tw * _S), int(_th * _S)
+TABLES = [(int(x * _S), int(y * _S)) for x, y in _LAYOUT["tables"]]
+DESK_POLY = tuple(int(v * _S) for v in _LAYOUT["desk_poly"])
+BOLSISTA_POS = (int(_LAYOUT["bolsista_pos"][0] * _S), int(_LAYOUT["bolsista_pos"][1] * _S))
+PCS = {label: (int(pos[0] * _S), int(pos[1] * _S)) for label, pos in _LAYOUT["pcs"].items()}
+ML_SLOTS = {label: (int(pos[0] * _S), int(pos[1] * _S)) for label, pos in _LAYOUT["ml_slots"].items()}
 MACHINES = {**PCS, **ML_SLOTS}
 
 HIT_R = 30            # hitbox de toque (60x60px, spec §7)
@@ -417,7 +423,7 @@ class KioskFrame(tk.Frame):
 
     def _start_deadline(self, on_expire, seconds: float | None = None):
         self._stop_deadline()
-        self._deadline = time.monotonic() + (seconds if seconds is not None else TIMEOUT_MS / 1000)
+        self._deadline = time.monotonic() + (seconds if seconds is not None else IDLE_TIMEOUT_S)
         self._on_expire = on_expire
         self._tick_deadline()
 
@@ -550,7 +556,7 @@ class KioskFrame(tk.Frame):
             if status != "ATIVO" or not maq or maq == SEM_MAQUINA:
                 continue
             occ.setdefault(maq, []).append((nome, mat or "", rid))
-        # Compatibilidade: registros genéricos "ML" preenchem slots livres (como em mapa.py)
+        # Compatibilidade: registros genéricos "ML" preenchem slots livres sequencialmente
         generic = occ.pop("ML", [])
         for label in ML_SLOTS:
             if generic and label not in occ:
@@ -589,9 +595,9 @@ class KioskFrame(tk.Frame):
         self._draw_legend()
 
         for label, (cx, cy) in PCS.items():
-            self._draw_machine(label, label, cx, cy, PC_R, PC_FREE, PC_OCCUPIED, PC_FREE_RING)
+            self._draw_machine(label, label, cx, cy, MACHINE_R, PC_FREE, PC_OCCUPIED, PC_FREE_RING)
         for label, (cx, cy) in ML_SLOTS.items():
-            self._draw_machine(label, "ML", cx, cy, ML_SLOT_R, ML_FREE, ML_OCCUPIED, ML_FREE_RING)
+            self._draw_machine(label, "ML", cx, cy, MACHINE_R, ML_FREE, ML_OCCUPIED, ML_FREE_RING)
 
         # Badges por último (acima dos círculos)
         for label, people in self._occupants.items():
