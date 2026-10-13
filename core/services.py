@@ -24,6 +24,7 @@ DEFAULT_CONFIG = {
     "ultimo_bolsista": None,
     "modo_ui": "dashboard",
     "kiosk_fullscreen": False,
+    "kiosk_enter_confirm": True,
     "layout": "lab_informatica",
     "open_export_folder": True,
     "escolher_maquina_entrada": False,

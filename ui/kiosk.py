@@ -265,6 +265,19 @@ class KioskFrame(tk.Frame):
                         
         self.menu_options.add_checkbutton(label="Auto tela-cheia", variable=self.var_fs, command=_toggle_fs)
 
+        self.var_enter_confirm = tk.BooleanVar(value=load_config().get("kiosk_enter_confirm", True))
+
+        def _toggle_enter_confirm():
+            cfg = load_config()
+            cfg["kiosk_enter_confirm"] = self.var_enter_confirm.get()
+            save_config(cfg)
+
+        self.menu_options.add_checkbutton(
+            label="Confirmação com enter na entrada",
+            variable=self.var_enter_confirm,
+            command=_toggle_enter_confirm,
+        )
+
         # Indicador de passos: Matrícula › Nome › Local
         steps = tk.Frame(top, bg=BG)
         steps.pack(pady=(8, 0))
@@ -408,12 +421,12 @@ class KioskFrame(tk.Frame):
         self._fb_text, self._fb_kind = text, kind
         self._render_feedback()
 
-    def _flash_feedback(self, text, ms=3000):
-        """Erro temporário; restaura a mensagem anterior depois."""
+    def _flash_feedback(self, text, ms=3000, kind="error"):
+        """Feedback temporário; restaura a mensagem anterior depois."""
         if self._flash_job:
             self.after_cancel(self._flash_job)
         prev = (self._fb_text, self._fb_kind)
-        self._fb_text, self._fb_kind = text, "error"
+        self._fb_text, self._fb_kind = text, kind
         self._render_feedback()
 
         def _back():
@@ -466,7 +479,7 @@ class KioskFrame(tk.Frame):
     def _validate_matricula(self, proposed: str) -> bool:
         if proposed != "" and not (proposed.isdigit() and len(proposed) <= 6):
             return False
-        if len(proposed) == 6 and self._state == IDLE:
+        if len(proposed) == 6 and self._state == IDLE and not self.var_enter_confirm.get():
             self.after_idle(self._on_matricula_submitted)
         return True
 
@@ -874,7 +887,7 @@ class KioskFrame(tk.Frame):
             return
         mat = self._entry.get().strip()
         if mat == "":
-            self._on_sem_matricula()
+            self._flash_feedback(IDLE_MSG, ms=1500, kind="warn")
             return
         if len(mat) != 6:
             self._flash_feedback("A matrícula deve ter 6 dígitos.")
@@ -931,7 +944,7 @@ class KioskFrame(tk.Frame):
             return
         mat = self._entry.get().strip()
         if mat == "":
-            self._on_sem_matricula()
+            self._flash_feedback("A matrícula deve ter 6 dígitos.")
             return
         if len(mat) != 6:
             self._flash_feedback("A matrícula deve ter 6 dígitos.")
