@@ -137,9 +137,10 @@ def _mix(c1: str, c2: str, t: float) -> str:
 
 
 class KioskFrame(tk.Frame):
-    def __init__(self, parent, on_switch_mode=None):
+    def __init__(self, parent, on_switch_mode=None, config=None):
         self.on_switch_mode = on_switch_mode
-        self.config = load_config()
+        self.config = config if config is not None else load_config()
+        self._clock_initial_tick = True
         super().__init__(parent, bg=BG)
         self._ff = _pick_font_family()
         self._state = IDLE
@@ -249,12 +250,13 @@ class KioskFrame(tk.Frame):
         self.btn_menu["menu"] = self.menu_options
         
         from core.services import load_config, save_config
-        self.var_fs = tk.BooleanVar(value=load_config().get("kiosk_fullscreen", False))
+        self.var_fs = tk.BooleanVar(value=self.config.get("kiosk_fullscreen", False))
         
         def _toggle_fs():
             cfg = load_config()
             cfg["kiosk_fullscreen"] = self.var_fs.get()
             save_config(cfg)
+            self.config.update(cfg)
             top = self.winfo_toplevel()
             if self.var_fs.get():
                 top.attributes("-fullscreen", True)
@@ -270,12 +272,13 @@ class KioskFrame(tk.Frame):
                         
         self.menu_options.add_checkbutton(label="Auto tela-cheia", variable=self.var_fs, command=_toggle_fs)
 
-        self.var_enter_confirm = tk.BooleanVar(value=load_config().get("kiosk_enter_confirm", True))
+        self.var_enter_confirm = tk.BooleanVar(value=self.config.get("kiosk_enter_confirm", True))
 
         def _toggle_enter_confirm():
             cfg = load_config()
             cfg["kiosk_enter_confirm"] = self.var_enter_confirm.get()
             save_config(cfg)
+            self.config.update(cfg)
 
         self.menu_options.add_checkbutton(
             label="Confirmação com enter na entrada",
@@ -407,9 +410,11 @@ class KioskFrame(tk.Frame):
         n = agora()
         self._lbl_clock.config(text=f"{n.strftime('%H:%M')} • {DIAS[n.weekday()]}")
 
-        novos_backups = verificar_e_executar_backups(self.config)
-        for slot_key in novos_backups:
-            mostrar_toast(self.winfo_toplevel(), f"Backup das {slot_key}h realizado!")
+        if not self._clock_initial_tick:
+            novos_backups = verificar_e_executar_backups(self.config)
+            for slot_key in novos_backups:
+                mostrar_toast(self.winfo_toplevel(), f"Backup das {slot_key}h realizado!")
+        self._clock_initial_tick = False
 
         self._clock_job = self.after(1000, self._tick_clock)
 
@@ -1141,6 +1146,7 @@ class KioskFrame(tk.Frame):
                         orfaos.remove(p["matricula"])
                         cfg["orfaos_sem_saida"] = orfaos
                         save_config(cfg)
+                        self.config.update(cfg)
                 destino = "sem máquina" if machine == SEM_MAQUINA else (
                     "Mesa Livre" if machine.startswith("ML") else f"PC {machine}")
                 self._toast(f"Entrada registrada: {p['nome']} ({destino}) às {res['hora']}")
