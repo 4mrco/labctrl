@@ -360,6 +360,71 @@ def confirmar_data_hora_suspeita(parent: tk.Tk | tk.Toplevel,
     return resultado["proceder"]
 
 
+def dialog_fechar_com_ativos(parent: tk.Tk | tk.Toplevel, ativos: int) -> str:
+    """
+    Exibe diálogo de confirmação ao tentar fechar a aplicação com alunos no laboratório.
+    Retorna:
+      - 'registrar_e_sair': registra saída com a hora atual, programa lembrete de órfão e fecha.
+      - 'sair_sem_registrar': fecha sem alterar os registros ativos (serão pegos como órfãos no próximo boot).
+      - 'cancelar': cancela o fechamento e mantém a aplicação aberta.
+    """
+    t = TEMAS["default"]
+    bg, fg, field = t["bg"], t["fg"], t["field"]
+    win = tk.Toplevel(parent)
+    win.title("Atenção — Pessoas no Laboratório")
+    win.configure(bg=bg)
+    setup_dialog(win, parent, min_width=440, min_height=175,
+                 resizable=(False, False), escape_close=True)
+
+    resultado = {"opcao": "cancelar"}
+
+    def escolher(opcao):
+        resultado["opcao"] = opcao
+        win.destroy()
+
+    msg = (
+        f"Há {ativos} pessoa(s) ainda dentro do laboratório.\n"
+        f"Como deseja proceder ao fechar o sistema?"
+    )
+    tk.Label(win, text=msg, bg=bg, fg=fg, justify="center", font=("Arial", 10)).pack(pady=(18, 12), padx=20)
+
+    btn_frame = tk.Frame(win, bg=bg)
+    btn_frame.pack(pady=(4, 16), padx=20, fill="x")
+
+    btn_reg = tk.Button(
+        btn_frame,
+        text="Registrar saída dos ativos e sair",
+        command=lambda: escolher("registrar_e_sair"),
+        bd=0, highlightthickness=0, bg="#2e5b88", fg="#ffffff",
+        padx=12, pady=7, font=("Arial", 10, "bold")
+    )
+    btn_reg.pack(side="top", fill="x", pady=(0, 8))
+
+    row_bottom = tk.Frame(btn_frame, bg=bg)
+    row_bottom.pack(side="top", fill="x")
+
+    btn_sem_reg = tk.Button(
+        row_bottom,
+        text="Fechar sem registrar saída",
+        command=lambda: escolher("sair_sem_registrar"),
+        bd=0, highlightthickness=0, bg="#35383e", fg=fg,
+        padx=10, pady=6, font=("Arial", 9)
+    )
+    btn_sem_reg.pack(side="left", expand=True, fill="x", padx=(0, 4))
+
+    btn_cancel = tk.Button(
+        row_bottom,
+        text="Cancelar",
+        command=lambda: escolher("cancelar"),
+        bd=0, highlightthickness=0, bg="#2a2d32", fg="#aaa",
+        padx=10, pady=6, font=("Arial", 9)
+    )
+    btn_cancel.pack(side="left", expand=True, fill="x", padx=(4, 0))
+
+    win.wait_window()
+    return resultado["opcao"]
+
+
 def popup_sem_matricula(parent: tk.Tk | tk.Toplevel) -> tuple[str, str] | None:
     """Retorna (nome, tipo) ou None se cancelado."""
     t = TEMAS["default"]
@@ -855,7 +920,7 @@ def abrir_alunos(parent, on_success_callback=None):
         if not sel:
             return
         matricula = tree.item(sel)["tags"][0]
-        novo_nome = pedir_input(parent, f"Editar — {matricula}", "Novo nome:")
+        novo_nome = pedir_input(win, f"Editar — {matricula}", "Novo nome:")
         if novo_nome:
             atualizar_aluno(matricula, novo_nome)
             recarregar()
@@ -868,7 +933,7 @@ def abrir_alunos(parent, on_success_callback=None):
         matricula, nome, _ = tree.item(sel)["values"]
         if messagebox.askyesno("Confirmar",
                 f"Remover {nome}?\n(registros associados não serão apagados)",
-                parent=parent):
+                parent=win):
             deletar_aluno(matricula)
             recarregar()
             if on_success_callback: on_success_callback()
@@ -1044,11 +1109,11 @@ def abrir_form_edicao(parent, rid: int, on_success_callback=None):
                 dt_saida = datetime.strptime(nova_saida, "%H:%M")
                 if dt_saida <= dt_entrada:
                     messagebox.showerror("Horário inválido",
-                        "A saída deve ser posterior à entrada.", parent=parent)
+                        "A saída deve ser posterior à entrada.", parent=win)
                     return
         except ValueError:
             messagebox.showerror("Formato inválido",
-                "Use DD/MM/AAAA para data e HH:MM para horários.", parent=parent)
+                "Use DD/MM/AAAA para data e HH:MM para horários.", parent=win)
             return
         novo_nome = campos["Nome"].get().strip()
         try:

@@ -16,13 +16,14 @@ Executar a partir da raiz do projeto:  python3 -m ui.kiosk
 
 import math
 import time
+from datetime import datetime, timedelta
 import tkinter as tk
 from tkinter import font as tkfont
 
 from core.config import TEMAS
 from core.database import (
     buscar_aluno, buscar_registro_ativo, buscar_registro_por_id,
-    buscar_registros_por_mes, finalizar_registro, inserir_aluno,
+    buscar_registros_por_mes, buscar_ultimo_registro, finalizar_registro, inserir_aluno,
 )
 from core.services import (
     agora, gerar_id_servidor, load_config, load_layout, normalizar_nome,
@@ -157,6 +158,7 @@ class KioskFrame(tk.Frame):
         self._undo_job = None
         self._undo_action: dict | None = None
         self._last_exit_ts = 0.0
+        self._boot_ts: float = time.monotonic()
         self._fb_text, self._fb_kind = IDLE_MSG, "idle"
         self._occupants: dict[str, list[tuple[str, str, int]]] = {}
         self._circles: dict[str, dict] = {}   # machine → {oval, fill, outline}
@@ -743,8 +745,8 @@ class KioskFrame(tk.Frame):
     def _is_interactive(self, label) -> bool:
         if self._state == AWAITING:
             return True
-        # Em repouso: máquina com exatamente 1 pessoa → clique pede confirmação de saída
-        return self._state == IDLE and len(self._occupants.get(label, [])) == 1
+        # Em repouso: máquina com ocupante(s) → clique abre confirmação de saída ou painel
+        return self._state == IDLE and bool(self._occupants.get(label))
 
     def _on_motion(self, event):
         label = self._machine_at(event.x, event.y)
@@ -1091,6 +1093,25 @@ class KioskFrame(tk.Frame):
             return "break"
 
 
+    def _verificar_relogio(self) -> bool:
+        JANELA = 15 * 60
+        TOLERANCIA = timedelta(minutes=5)
+        if time.monotonic() - getattr(self, "_boot_ts", 0) > JANELA:
+            return True
+        reg = buscar_ultimo_registro()
+        if not reg:
+            return True
+        data_ant, entrada_ant = reg
+        try:
+            dt_ant = datetime.strptime(f"{data_ant} {entrada_ant}", "%d/%m/%Y %H:%M")
+            dt_novo = agora().replace(second=0, microsecond=0)
+            if dt_novo < dt_ant - TOLERANCIA:
+                from ui.dialogs import confirmar_data_hora_suspeita
+                return confirmar_data_hora_suspeita(self.winfo_toplevel(), dt_ant, dt_novo)
+        except Exception:
+            pass
+        return True
+
     def _on_machine_selected(self, machine: str):
         if self._state != AWAITING or not self._pending:
             return
@@ -1098,6 +1119,10 @@ class KioskFrame(tk.Frame):
         if time.monotonic() < self._awaiting_ready_ts:
             return
         self._stop_deadline()
+        if not self._verificar_relogio():
+            self._reset()
+            self._flash_feedback("Entrada cancelada: relógio do sistema suspeito.", kind="warn")
+            return
         self._set_state(BUSY)
         self._busy("Registrando entrada…")
         p = self._pending

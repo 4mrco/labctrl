@@ -128,14 +128,15 @@ def deletar_aluno(matricula: str) -> None:
 
 # ── Registros ──
 
-def inserir_registro(matricula, nome, data, hora, maquina, bolsista) -> None:
+def inserir_registro(matricula, nome, data, hora, maquina, bolsista) -> int:
     with get_conn() as conn:
-        conn.execute(
+        cursor = conn.execute(
             """INSERT INTO registros
                (matricula,nome,data,entrada,maquina,bolsista,status)
                VALUES (?,?,?,?,?,?,'ATIVO')""",
             (matricula, nome, data, hora, maquina, bolsista),
         )
+        return cursor.lastrowid
 
 
 def finalizar_registro(rid: int, hora_saida: str | None) -> None:
@@ -228,6 +229,16 @@ def contar_ativos() -> int:
         return conn.execute(
             "SELECT COUNT(*) FROM registros WHERE status='ATIVO'"
         ).fetchone()[0]
+
+
+@safe_query([])
+def buscar_registros_ativos_detalhes() -> list[tuple]:
+    """Retorna [(id, nome, matricula, data, entrada), ...] de todos os registros com status ATIVO."""
+    with get_conn() as conn:
+        return conn.execute(
+            """SELECT id, nome, matricula, data, entrada FROM registros
+               WHERE status='ATIVO'"""
+        ).fetchall()
 
 
 @safe_query([])

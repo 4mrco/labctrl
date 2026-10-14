@@ -61,6 +61,7 @@ from core.database import (
     buscar_ultimo_registro,
     contar_registros_hoje,
     contar_ativos,
+    buscar_registros_ativos_detalhes,
     buscar_meses,
     buscar_export_mes,
     buscar_export_dia,
@@ -99,7 +100,8 @@ from ui.dialogs import (
     setup_dialog, focus_first_field, bind_enter_to_button,
     visualizar_db, abrir_bolsistas,
     abrir_alunos, abrir_form_edicao, copiar_periodo,
-    mostrar_toast, pedir_nome_com_matricula
+    mostrar_toast, pedir_nome_com_matricula,
+    dialog_fechar_com_ativos
 )
 
 # ─────────────────────────────────────────────
@@ -1449,16 +1451,28 @@ class App:
         try:
             ativos = contar_ativos()
             if ativos > 0:
-                resp = messagebox.askyesno(
-                    "Atenção",
-                    f"Há {ativos} pessoa(s) ainda dentro do laboratório.\n"
-                    "Deseja mesmo fechar o sistema?",
-                    parent=self.root
-                )
-                if not resp:
+                opcao = dialog_fechar_com_ativos(self.root, ativos)
+                if opcao == "cancelar":
                     return
-        except Exception:
-            pass
+                elif opcao == "registrar_e_sair":
+                    hora_saida = agora().strftime("%H:%M")
+                    regs = buscar_registros_ativos_detalhes()
+                    orfaos_sem_saida = self.config.setdefault("orfaos_sem_saida", [])
+                    config_modificada = False
+                    for r in regs:
+                        rid = r[0]
+                        matricula = r[2] if len(r) > 2 else ""
+                        finalizar_registro(rid, hora_saida)
+                        if matricula and matricula not in orfaos_sem_saida:
+                            orfaos_sem_saida.append(matricula)
+                            config_modificada = True
+                    if config_modificada:
+                        self.config["orfaos_sem_saida"] = orfaos_sem_saida
+                        save_config(self.config)
+                elif opcao == "sair_sem_registrar":
+                    pass
+        except Exception as e:
+            log.error("Erro ao fechar aplicação: %s", e)
 
         if getattr(self, "_status_job", None):
             self.root.after_cancel(self._status_job)
@@ -1490,6 +1504,9 @@ class App:
         # Backups
         for b in res.get("backups", []):
             mostrar_toast(self.root, f"Backup das {b}h realizado!")
+
+        if res.get("relogio"):
+            mostrar_toast(self.root, "Atenção: Relógio do sistema parece atrasado!")
             
         self._novidades_job = self.root.after(400, self._verificar_novidades)
 
