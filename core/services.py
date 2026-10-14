@@ -381,19 +381,11 @@ def processar_entrada(matricula: str | None, nome: str, maquina: str, bolsista: 
             return {"status": "ja_ativo", "rid_ativo": rid_ativo, "nome": nome}
 
     now = agora()
-    db.inserir_registro(
+    rid = db.inserir_registro(
         matricula, nome,
         now.strftime("%d/%m/%Y"), now.strftime("%H:%M"),
         maquina, bolsista,
     )
-
-    # Descobre o id do registro recém-inserido
-    db_conn = db.get_conn
-    with db_conn() as conn:
-        rid = conn.execute(
-            "SELECT id FROM registros WHERE matricula IS ? AND nome=? ORDER BY id DESC LIMIT 1",
-            (matricula, nome),
-        ).fetchone()[0]
 
     return {"status": "entrada_registrada", "rid": rid, "nome": nome, "hora": now.strftime("%H:%M")}
 
