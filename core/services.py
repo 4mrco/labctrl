@@ -285,11 +285,6 @@ def executar_backup_diario(db_path=None, max_backups=5) -> str:
                 os.remove(tmp_dest_db)
             except OSError:
                 pass
-        if os.path.exists(dest_db):
-            try:
-                os.remove(dest_db)
-            except OSError:
-                pass
         try:
             os.rmdir(specific_backup_dir)
         except OSError:
@@ -333,13 +328,21 @@ def verificar_e_executar_backups(config: dict) -> list[str]:
                 log.error("Falha ao executar backup automático do slot %sh: %s", slot_key, e)
 
     if executados:
-        config["backups_diarios"] = slots
         try:
-            save_config(config)
+            fresh_cfg = load_config()
+        except Exception:
+            fresh_cfg = dict(config)
+        fresh_slots = fresh_cfg.setdefault("backups_diarios", {})
+        fresh_slots.update(slots)
+        fresh_cfg["ultimo_backup"] = today_str
+        config.update(fresh_cfg)
+        try:
+            save_config(fresh_cfg)
         except Exception as e:
             log.error("Falha ao salvar configuração após backups automáticos: %s", e)
             for s in executados:
                 slots.pop(s, None)
+                fresh_slots.pop(s, None)
             config["backups_diarios"] = slots
             return []
 

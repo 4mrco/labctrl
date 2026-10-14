@@ -66,7 +66,7 @@ class AppController:
             _maximize()
             self.root.unbind("<Escape>")
         
-        self.current_app = KioskFrame(self.root, on_switch_mode=lambda: self.switch_mode("dashboard"))
+        self.current_app = KioskFrame(self.root, on_switch_mode=lambda: self.switch_mode("dashboard"), config=self.config)
         self.current_app.pack(fill="both", expand=True)
         
         # In kiosk, boot operations run silently in background
@@ -94,7 +94,7 @@ class AppController:
         self.root.attributes("-fullscreen", False)
         self.root.unbind("<Escape>")
         
-        self.current_app = App(self.root, on_switch_mode=lambda: self.switch_mode("kiosk"))
+        self.current_app = App(self.root, on_switch_mode=lambda: self.switch_mode("kiosk"), config=self.config)
         # Note: App currently packs its own children to root, so `App(self.root)` modifies root directly.
         # But wait, App uses self.root natively. If it doesn't subclass Frame, `destroy()` might be tricky.
         # Let's check if `App` has a `destroy` method or how to clean it up.

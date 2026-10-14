@@ -117,12 +117,13 @@ VERSAO_ATUAL = "1.3.2"
 # ─────────────────────────────────────────────
 
 class App:
-    def __init__(self, root: tk.Tk, on_switch_mode=None):
+    def __init__(self, root: tk.Tk, on_switch_mode=None, config=None):
         self.on_switch_mode = on_switch_mode
         self.root = root
         self.root.title("")
         self.root.minsize(820, 400)
-        self.config = load_config()
+        self.config = config if config is not None else load_config()
+        self._relogio_initial_tick = True
 
         # estado de ordenação por coluna
         self._sort_state: dict = {}
@@ -1263,9 +1264,11 @@ class App:
         now = agora()
         self.lbl_clock.config(text=now.strftime("%H:%M"))
 
-        novos_backups = verificar_e_executar_backups(self.config)
-        for slot_key in novos_backups:
-            mostrar_toast(self.root, f"Backup das {slot_key}h realizado!")
+        if not self._relogio_initial_tick:
+            novos_backups = verificar_e_executar_backups(self.config)
+            for slot_key in novos_backups:
+                mostrar_toast(self.root, f"Backup das {slot_key}h realizado!")
+        self._relogio_initial_tick = False
 
         self._relogio_job = self.root.after(1000, self._tick_relogio)
 
@@ -1457,7 +1460,8 @@ class App:
                 elif opcao == "registrar_e_sair":
                     hora_saida = agora().strftime("%H:%M")
                     regs = buscar_registros_ativos_detalhes()
-                    orfaos_sem_saida = self.config.setdefault("orfaos_sem_saida", [])
+                    cfg = load_config()
+                    orfaos_sem_saida = cfg.setdefault("orfaos_sem_saida", [])
                     config_modificada = False
                     for r in regs:
                         rid = r[0]
@@ -1467,8 +1471,9 @@ class App:
                             orfaos_sem_saida.append(matricula)
                             config_modificada = True
                     if config_modificada:
-                        self.config["orfaos_sem_saida"] = orfaos_sem_saida
-                        save_config(self.config)
+                        cfg["orfaos_sem_saida"] = orfaos_sem_saida
+                        save_config(cfg)
+                        self.config.update(cfg)
                 elif opcao == "sair_sem_registrar":
                     pass
         except Exception as e:
@@ -1661,3 +1666,9 @@ class App:
                 delattr(self.root, "_from_dialog")
             except (AttributeError, tk.TclError):
                 pass
+
+        # Reset WM_DELETE_WINDOW protocol so closing root doesn't call destroyed App.fechar_aplicacao
+        try:
+            self.root.protocol("WM_DELETE_WINDOW", self.root.destroy)
+        except (tk.TclError, AttributeError):
+            pass
