@@ -1,13 +1,18 @@
+import sqlite3
 import copy
 import json
 import os
 import shutil
 import glob
 import subprocess
+import csv
+import logging
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
 from core.config import CONFIG_FILE, EXPORT_DIR, DB_FILE, BASE_DIR
+
+log = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────
@@ -227,8 +232,10 @@ def calcular_estatisticas(dados: list[tuple]) -> dict:
 # SERVIÇO: BACKUP & SISTEMA
 # ─────────────────────────────────────────────
 
+DEFAULT_BACKUP_SLOTS = [(12, "12"), (17, "17")]
+
 def executar_backup_diario(db_path=None, max_backups=5) -> str:
-    """Creates a timestamped backup directory and keeps only max_backups."""
+    """Creates a timestamped backup directory using SQLite online backup and keeps only max_backups."""
     if db_path is None:
         db_path = DB_FILE
         
@@ -239,14 +246,57 @@ def executar_backup_diario(db_path=None, max_backups=5) -> str:
     today_str = now.strftime("%Y-%m-%d")
     timestamp_str = now.strftime("%Y-%m-%d_%H%M")
     
+    if not os.path.exists(db_path):
+        raise FileNotFoundError(f"Banco de dados não encontrado para backup: {db_path}")
+
     # Create specific backup folder
     specific_backup_dir = os.path.join(backup_dir, timestamp_str)
     os.makedirs(specific_backup_dir, exist_ok=True)
     
-    if os.path.exists(db_path):
-        shutil.copy2(db_path, os.path.join(specific_backup_dir, "lab.db"))
+    dest_db = os.path.join(specific_backup_dir, "lab.db")
+    tmp_dest_db = os.path.join(specific_backup_dir, "lab.db.tmp")
+    
+    src_conn = None
+    dst_conn = None
+    try:
+        src_conn = sqlite3.connect(db_path)
+        dst_conn = sqlite3.connect(tmp_dest_db)
+        src_conn.backup(dst_conn)
+        dst_conn.close()
+        dst_conn = None
+        src_conn.close()
+        src_conn = None
         
-    # Rotate backups (directories only)
+        os.replace(tmp_dest_db, dest_db)
+    except Exception as e:
+        log.error("Falha ao criar backup do banco de dados: %s", e)
+        if dst_conn:
+            try:
+                dst_conn.close()
+            except Exception:
+                pass
+        if src_conn:
+            try:
+                src_conn.close()
+            except Exception:
+                pass
+        if os.path.exists(tmp_dest_db):
+            try:
+                os.remove(tmp_dest_db)
+            except OSError:
+                pass
+        if os.path.exists(dest_db):
+            try:
+                os.remove(dest_db)
+            except OSError:
+                pass
+        try:
+            os.rmdir(specific_backup_dir)
+        except OSError:
+            pass
+        raise
+        
+    # Rotate backups (directories only - retention behavior preserved as deferred)
     all_dirs = [os.path.join(backup_dir, d) for d in os.listdir(backup_dir)]
     backups = sorted([d for d in all_dirs if os.path.isdir(d)], key=os.path.getmtime)
     
@@ -259,6 +309,41 @@ def executar_backup_diario(db_path=None, max_backups=5) -> str:
     save_config(cfg)
     
     return f"Backup realizado com sucesso: {timestamp_str}"
+
+def verificar_e_executar_backups(config: dict) -> list[str]:
+    """Checks scheduled daily backup slots (12h, 17h) and executes due backups.
+    
+    Returns a list of successfully executed slot keys (e.g. ['12'], ['17'], or []).
+    Ensures each slot is executed at most once per day and handles save failures safely.
+    """
+    now = agora()
+    today_str = now.strftime("%Y-%m-%d")
+    slots = config.get("backups_diarios", {})
+    if not isinstance(slots, dict):
+        slots = {}
+
+    executados = []
+    for slot_hour, slot_key in DEFAULT_BACKUP_SLOTS:
+        if now.hour >= slot_hour and slots.get(slot_key) != today_str:
+            try:
+                executar_backup_diario()
+                slots[slot_key] = today_str
+                executados.append(slot_key)
+            except Exception as e:
+                log.error("Falha ao executar backup automático do slot %sh: %s", slot_key, e)
+
+    if executados:
+        config["backups_diarios"] = slots
+        try:
+            save_config(config)
+        except Exception as e:
+            log.error("Falha ao salvar configuração após backups automáticos: %s", e)
+            for s in executados:
+                slots.pop(s, None)
+            config["backups_diarios"] = slots
+            return []
+
+    return executados
 
 def abrir_diretorio_so(caminho_relativo: str):
     """Opens a directory in the host OS file explorer."""
@@ -414,13 +499,7 @@ def run_boot_operations(config: dict) -> dict:
     }
     
     # 1. Backups
-    slots = config.get("backups_diarios", {})
-    for slot_hour, slot_key in [(12, "12"), (17, "17")]:
-        if now.hour >= slot_hour and slots.get(slot_key) != today_str:
-            executar_backup_diario()
-            slots[slot_key] = today_str
-            results["backups"].append(slot_key)
-    config["backups_diarios"] = slots
+    results["backups"] = verificar_e_executar_backups(config)
     
     # 2. Órfãos
     orfaos = db.buscar_registros_orfaos()
@@ -463,59 +542,154 @@ def run_boot_operations(config: dict) -> dict:
             
     return results
 
-def finalizar_export_silencioso(mes: str, dados: list, config: dict):
-    from core.services import get_month_export_dir, calcular_estatisticas, agora
-    import csv, os
-    
-    stats = calcular_estatisticas(dados)
-    label = mes.replace("/", "_")
-    titulo = f"Mês {mes}"
+def normalizar_matricula_export(m: str | None) -> str:
+    """Normaliza matrícula para exportação de forma consistente e idempotente.
+
+    None / vazio -> ''
+    'SERVIDOR' / 'Servidor' -> 'Servidor'
+    qualquer outra string -> preserva (ex: '123456', 'SRV-slug')
+    """
+    if not m:
+        return ""
+    m_str = str(m).strip()
+    if m_str.upper() == "SERVIDOR":
+        return "Servidor"
+    return m_str
+
+
+def gerar_relatorio_csv(dados: list[tuple], label: str, titulo: str) -> str:
+    """Gera o arquivo CSV canônico de relatório do laboratório.
+
+    Contém:
+      1. Cabeçalho com métricas gerais do laboratório
+      2. Resumo individual por pessoa em blocos de 10 (paginados em grupos de até 50)
+      3. Seção 'Registros detalhados' com todas as linhas brutas de atendimento
+
+    Retorna o caminho do arquivo gerado.
+    Garante escrita atômica via arquivo .tmp e limpeza em caso de falha.
+    """
+    dados_norm = [
+        (
+            data,
+            entrada,
+            saida,
+            nome,
+            normalizar_matricula_export(mat),
+            "ML" if str(maquina).startswith("ML-") else maquina,
+            bolsista,
+        )
+        for data, entrada, saida, nome, mat, maquina, bolsista in dados
+    ]
+
+    stats = calcular_estatisticas(dados_norm)
     nome_arquivo = f"lab_{label}.csv"
-    
+
     if dados:
-        primeira_data = dados[0][0]
-        mes_pasta = primeira_data.split("/")[2] + "-" + primeira_data.split("/")[1]
+        primeira_data = str(dados[0][0])
+        partes = primeira_data.split("/")
+        if len(partes) >= 3:
+            mes_pasta = f"{partes[2]}-{partes[1]}"
+        else:
+            mes_pasta = agora().strftime("%Y-%m")
     else:
         mes_pasta = agora().strftime("%Y-%m")
-        
+
     month_dir = get_month_export_dir(mes_pasta)
     caminho = os.path.join(month_dir, nome_arquivo)
-    
-    with open(caminho, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow([f"Relatório do Laboratório — {titulo}"])
-        w.writerow([
-            f"Total de visitas: {stats.get('total_visitas', 0)}",
-            f"Pessoas distintas: {stats.get('total_pessoas', 0)}",
-            f"Tempo total: {stats.get('tempo_total', '-')}",
-            f"Horário de pico: {stats.get('horario_pico', '-')}",
-            f"Dia mais movim.: {stats.get('dia_pico', '-')}",
-            f"Top 3 máquinas: {stats.get('top3_maquinas', '-')}",
-        ])
-        w.writerow([])
-        w.writerow(["Resumo por pessoa (blocos de 10)"])
-        
-        chunk = stats.get("visitas_por_pessoa", [])
-        cols = [chunk[i:i+10] for i in range(0, len(chunk), 10)]
-        header = []
-        for c in cols:
-            if c:
-                header.extend(["Nome (Matrícula)", "Visitas", "Tempo total", ""])
-        w.writerow(header)
-        
-        for row_idx in range(10):
-            row_data = []
-            for c in cols:
-                if c:
-                    if row_idx < len(c):
-                        pessoa, visitas = c[row_idx]
-                        tempo = stats.get("horas_por_pessoa", {}).get(pessoa, "-")
-                        row_data.extend([pessoa, visitas, tempo, ""])
-                    else:
-                        row_data.extend(["", "", "", ""])
-            if any(row_data):
-                w.writerow(row_data)
-                
-    if mes not in config["exported_months"]:
-        config["exported_months"].append(mes)
+    caminho_tmp = f"{caminho}.tmp"
+
+    try:
+        with open(caminho_tmp, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow([f"Relatório do Laboratório — {titulo}"])
+            w.writerow([
+                f"Total de visitas: {stats.get('total_visitas', 0)}",
+                f"Pessoas distintas: {stats.get('total_pessoas', 0)}",
+                f"Tempo total: {stats.get('tempo_total', '-')}",
+                f"Horário de pico: {stats.get('horario_pico', '-')}",
+                f"Dia mais movim.: {stats.get('dia_pico', '-')}",
+                f"Top 3 máquinas: {stats.get('top3_maquinas', '-')}",
+            ])
+            w.writerow([])
+            w.writerow(["Resumo por pessoa (blocos de 10)"])
+
+            def _write_blocks(writer, chunk_of_50):
+                cols = [chunk_of_50[i:i + 10] for i in range(0, len(chunk_of_50), 10)]
+                header = []
+                for c in cols:
+                    if c:
+                        header.extend(["Nome (Matrícula)", "Visitas", "Tempo total", ""])
+                writer.writerow(header)
+
+                for row_idx in range(10):
+                    row_data = []
+                    has_data = False
+                    for c in cols:
+                        if c:
+                            if row_idx < len(c):
+                                pessoa, visitas = c[row_idx]
+                                tempo = stats.get("horas_por_pessoa", {}).get(pessoa, "-")
+                                row_data.extend([pessoa, visitas, tempo, ""])
+                                has_data = True
+                            else:
+                                row_data.extend(["", "", "", ""])
+                    if has_data:
+                        writer.writerow(row_data)
+                writer.writerow([])
+
+            pessoas = stats.get("visitas_por_pessoa", [])
+            for i in range(0, len(pessoas), 50):
+                _write_blocks(w, pessoas[i:i + 50])
+
+            if not pessoas:
+                w.writerow([])
+
+            w.writerow(["Registros detalhados"])
+            w.writerow([
+                "Data", "Entrada", "Saída", "Nome",
+                "Matrícula", "Máquina(Nº)", "Bolsista presente"
+            ])
+            w.writerows(dados_norm)
+            f.flush()
+            os.fsync(f.fileno())
+
+        os.replace(caminho_tmp, caminho)
+    except Exception:
+        if os.path.exists(caminho_tmp):
+            try:
+                os.remove(caminho_tmp)
+            except OSError:
+                pass
+        raise
+
+    return caminho
+
+
+def finalizar_export_silencioso(mes: str, dados: list, config: dict) -> str | None:
+    """Gera o CSV do mês anterior de forma silenciosa e atualiza config['exported_months'].
+
+    Retorna o nome do arquivo gerado (ex: 'lab_10_2026.csv') se sucesso, ou None se falha.
+    Garante que falhas de escrita ou falhas de gravação em config.json não deixem
+    um falso positivo de sucesso em memória.
+    """
+    label = mes.replace("/", "_")
+    titulo = f"Mês {mes}"
+    try:
+        caminho = gerar_relatorio_csv(dados, label, titulo)
+    except Exception as e:
+        log.error("Falha ao gerar CSV de exportação silenciosa para %s: %s", mes, e)
+        return None
+
+    nome_arquivo = os.path.basename(caminho)
+    if mes not in config.get("exported_months", []):
+        config.setdefault("exported_months", []).append(mes)
+        try:
+            save_config(config)
+        except Exception as e:
+            log.error("Falha ao salvar config após exportar %s: %s", mes, e)
+            if mes in config.get("exported_months", []):
+                config["exported_months"].remove(mes)
+            return None
+
+    return nome_arquivo
         

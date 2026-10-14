@@ -26,9 +26,9 @@ from core.database import (
 )
 from core.services import (
     agora, gerar_id_servidor, load_config, load_layout, normalizar_nome,
-    processar_entrada, reverter_acao, save_config,
+    processar_entrada, reverter_acao, save_config, verificar_e_executar_backups,
 )
-from ui.dialogs import popup_sem_matricula, abrir_form_edicao
+from ui.dialogs import popup_sem_matricula, abrir_form_edicao, mostrar_toast
 
 # ── Map Active Palette & Constants (Kiosk Canonical) ─────────────────────
 PC_FREE       = "#1E4D8C"
@@ -138,6 +138,7 @@ def _mix(c1: str, c2: str, t: float) -> str:
 class KioskFrame(tk.Frame):
     def __init__(self, parent, on_switch_mode=None):
         self.on_switch_mode = on_switch_mode
+        self.config = load_config()
         super().__init__(parent, bg=BG)
         self._ff = _pick_font_family()
         self._state = IDLE
@@ -174,19 +175,21 @@ class KioskFrame(tk.Frame):
         self._tick_clock()
         self._refresh_map()
         self._focus_entry()
-        self.after(150, self._focus_entry)
-        self.after(400, self._focus_entry)
+        self._init_focus_jobs = [
+            self.after(150, self._focus_entry),
+            self.after(400, self._focus_entry),
+        ]
 
         top = self.winfo_toplevel()
         for seq, handler in (("<Key>", self._on_key),
                              ("<Control-z>", self._desfazer),
                              ("<Control-Z>", self._desfazer)):
             self._top_binds.append((seq, top.bind(seq, handler, add="+")))
-        top.bind("<FocusIn>", lambda e: self._focus_entry() if self._state == IDLE else None, add="+")
-        # setup_dialog() chama parent._from_dialog() ao fechar modais; só define se
-        # a janela hospedeira (ex.: App) ainda não expôs o seu.
-        if not hasattr(top, "_from_dialog"):
-            top._from_dialog = self._return_focus_to_matricula
+        focus_in_id = top.bind("<FocusIn>", lambda e: self._focus_entry() if self._state == IDLE else None, add="+")
+        self._top_binds.append(("<FocusIn>", focus_in_id))
+        # setup_dialog() chama parent._from_dialog() ao fechar modais;
+        # Kiosk expõe seu próprio handler de retorno de foco.
+        top._from_dialog = self._return_focus_to_matricula
 
     # ── UI ────────────────────────────────────────────────────────────────
 
@@ -401,6 +404,11 @@ class KioskFrame(tk.Frame):
     def _tick_clock(self):
         n = agora()
         self._lbl_clock.config(text=f"{n.strftime('%H:%M')} • {DIAS[n.weekday()]}")
+
+        novos_backups = verificar_e_executar_backups(self.config)
+        for slot_key in novos_backups:
+            mostrar_toast(self.winfo_toplevel(), f"Backup das {slot_key}h realizado!")
+
         self._clock_job = self.after(1000, self._tick_clock)
 
     # ── Feedback ──────────────────────────────────────────────────────────
@@ -1228,13 +1236,24 @@ class KioskFrame(tk.Frame):
             if job:
                 try:
                     self.after_cancel(job)
-                except tk.TclError:
+                except (tk.TclError, ValueError):
                     pass
+                setattr(self, name, None)
+        for job in getattr(self, "_init_focus_jobs", []):
+            try:
+                self.after_cancel(job)
+            except (tk.TclError, ValueError):
+                pass
+        if hasattr(self, "_init_focus_jobs"):
+            self._init_focus_jobs.clear()
         try:
             top = self.winfo_toplevel()
             for seq, fid in self._top_binds:
                 top.unbind(seq, fid)
-        except tk.TclError:
+            self._top_binds.clear()
+            if getattr(top, "_from_dialog", None) == self._return_focus_to_matricula:
+                delattr(top, "_from_dialog")
+        except (tk.TclError, AttributeError):
             pass
         super().destroy()
 

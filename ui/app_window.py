@@ -90,7 +90,9 @@ from core.services import (
     reverter_acao,
     remover_registro as servico_remover_registro,
     executar_backup_diario,
+    verificar_e_executar_backups,
     abrir_diretorio_so,
+    gerar_relatorio_csv,
 )
 from ui.dialogs import (
     mostrar_sobre, pedir_input, popup_sem_matricula,
@@ -124,6 +126,10 @@ class App:
         self._sort_state: dict = {}
         self._status_job = None
         self._relogio_job = None
+        self._from_dialog_job = None
+        self._novidades_job = None
+        self._focus_out_bind = None
+        self._global_binds: list[tuple[str, str]] = []
         # pilha de undo: lista de dicts {tipo, ...dados para reverter}
         self._undo_stack: list[dict] = []
         # bolsista reminder: {nome: (first_ts, last_ts)} em segundos (time.monotonic)
@@ -139,13 +145,14 @@ class App:
         self._tick_relogio()
 
         self.root.protocol("WM_DELETE_WINDOW", self.fechar_aplicacao)
-        self.root.bind_all("<Control-z>", self._desfazer)
-        self.root.bind_all("<Control-Z>", self._desfazer)
-        self.root.bind_all("<Control-Key-z>", self._desfazer)
+        self._global_binds.clear()
+        for seq in ("<Control-z>", "<Control-Z>", "<Control-Key-z>"):
+            fid = self.root.bind_all(seq, self._desfazer)
+            self._global_binds.append((seq, fid))
         
         # Track active popup to fix Linux WM dangling menus
         self._active_popup = None
-        self.root.bind("<FocusOut>", self._on_focus_out, add="+")
+        self._focus_out_bind = self.root.bind("<FocusOut>", self._on_focus_out, add="+")
 
         # Expose _from_dialog on root so setup_dialog can call it without coupling
         self.root._from_dialog = self._from_dialog
@@ -153,8 +160,8 @@ class App:
         
 
 
-        # Serialized boot checks to avoid overlapping grabs
-        self.root.after(500, self._boot_checks)
+        # Boot checks are scheduled exclusively by AppController (app.py)
+        # to prevent duplicate execution on initial launch or mode switches.
 
     def _on_focus_out(self, event):
         """Forcefully unpost menus when the app loses focus to fix Linux WM quirks."""
@@ -170,6 +177,7 @@ class App:
 
     def _verificar_novidades(self):
         """Show a patch-notes popup for 2 days after a new version is detected."""
+        self._novidades_job = None
         versao_gravada = self.config.get("versao_registrada", "")
         expira_str     = self.config.get("popup_expira_em", "")
 
@@ -948,10 +956,14 @@ class App:
                      resizable=(False, False), escape_close=True)
 
         def forcar_backup():
-            msg = executar_backup_diario()
-            self.config["ultimo_backup"] = agora().strftime("%Y-%m-%d")
-            lbl_backup.config(text=f"Último backup: {self.config.get('ultimo_backup')}")
-            mostrar_toast(self.root, msg)
+            try:
+                msg = executar_backup_diario()
+                self.config["ultimo_backup"] = agora().strftime("%Y-%m-%d")
+                lbl_backup.config(text=f"Último backup: {self.config.get('ultimo_backup')}")
+                mostrar_toast(self.root, msg)
+            except Exception as e:
+                log.error("Falha ao forçar backup: %s", e)
+                mostrar_toast(self.root, "Erro ao gerar backup.")
 
         # Build grid
         grid_frame = tk.Frame(win, bg=bg)
@@ -1249,15 +1261,9 @@ class App:
         now = agora()
         self.lbl_clock.config(text=now.strftime("%H:%M"))
 
-        today_str = now.strftime("%Y-%m-%d")
-        slots = self.config.get("backups_diarios", {})
-        for slot_hour, slot_key in [(12, "12"), (17, "17")]:
-            if now.hour >= slot_hour and slots.get(slot_key) != today_str:
-                executar_backup_diario()
-                slots[slot_key] = today_str
-                self.config["backups_diarios"] = slots
-                save_config(self.config)
-                mostrar_toast(self.root, f"Backup das {slot_key}h realizado!")
+        novos_backups = verificar_e_executar_backups(self.config)
+        for slot_key in novos_backups:
+            mostrar_toast(self.root, f"Backup das {slot_key}h realizado!")
 
         self._relogio_job = self.root.after(1000, self._tick_relogio)
 
@@ -1468,9 +1474,11 @@ class App:
         res = run_boot_operations(self.config)
         
         if res.get("export"):
-            finalizar_export_silencioso(res["export"]["mes"], res["export"]["dados"], self.config)
-            from core.services import save_config
-            save_config(self.config)
+            nome_arq = finalizar_export_silencioso(res["export"]["mes"], res["export"]["dados"], self.config)
+            if nome_arq:
+                mostrar_toast(self.root, f"Exportação automática: {nome_arq}")
+            else:
+                mostrar_toast(self.root, "Erro na exportação automática.")
             
         if res.get("orfaos"):
             for r in res["orfaos"]:
@@ -1483,7 +1491,7 @@ class App:
         for b in res.get("backups", []):
             mostrar_toast(self.root, f"Backup das {b}h realizado!")
             
-        self.root.after(400, self._verificar_novidades)
+        self._novidades_job = self.root.after(400, self._verificar_novidades)
 
 
     # ── Export ───────────────────────────────
@@ -1494,80 +1502,9 @@ class App:
             messagebox.showinfo("Exportar", f"Nenhum registro para {titulo}.", parent=self.root)
             return
 
-        def _fmt_matricula(m):
-            if not m:
-                return ""
-            if m == "SERVIDOR":
-                return "Servidor"
-            return m
-
-        dados_norm = [
-            (data, entrada, saida, nome, _fmt_matricula(mat), "ML" if str(maquina).startswith("ML-") else maquina, bolsista)
-            for data, entrada, saida, nome, mat, maquina, bolsista in dados
-        ]
-
-        stats        = calcular_estatisticas(dados_norm)
-        nome_arquivo = f"lab_{label}.csv"
-
-        # Determine month for folder name from the first record's date
-        if dados:
-            primeira_data = dados[0][0]  # First record's date (DD/MM/YYYY)
-            mes_pasta = primeira_data.split("/")[2] + "-" + primeira_data.split("/")[1]  # YYYY-MM
-        else:
-            mes_pasta = agora().strftime("%Y-%m")
-
-        month_dir = get_month_export_dir(mes_pasta)
-        caminho = os.path.join(month_dir, nome_arquivo)
         try:
-            with open(caminho, "w", newline="", encoding="utf-8") as f:
-                w = csv.writer(f)
-                w.writerow([f"Relatório do Laboratório — {titulo}"])
-                w.writerow([
-                    f"Total de visitas: {stats.get('total_visitas', 0)}",
-                    f"Pessoas distintas: {stats.get('total_pessoas', 0)}",
-                    f"Tempo total: {stats.get('tempo_total', '-')}",
-                    f"Horário de pico: {stats.get('horario_pico', '-')}",
-                    f"Dia mais movim.: {stats.get('dia_pico', '-')}",
-                    f"Top 3 máquinas: {stats.get('top3_maquinas', '-')}",
-                ])
-                w.writerow([])
-                w.writerow(["Resumo por pessoa (blocos de 10)"])
-
-                def _write_blocks(writer, chunk_of_50):
-                    # split chunk into up to 5 columns of 10
-                    cols = [chunk_of_50[i:i+10] for i in range(0, len(chunk_of_50), 10)]
-                    header = []
-                    for c in cols:
-                        if c:
-                            header.extend(["Nome (Matrícula)", "Visitas", "Tempo total", ""])
-                    writer.writerow(header)
-                    
-                    for row_idx in range(10):
-                        row_data = []
-                        has_data = False
-                        for c in cols:
-                            if c:
-                                if row_idx < len(c):
-                                    pessoa, visitas = c[row_idx]
-                                    tempo = stats.get("horas_por_pessoa", {}).get(pessoa, "-")
-                                    row_data.extend([pessoa, visitas, tempo, ""])
-                                    has_data = True
-                                else:
-                                    row_data.extend(["", "", "", ""])
-                        if has_data:
-                            writer.writerow(row_data)
-                    writer.writerow([])
-
-                pessoas = stats.get("visitas_por_pessoa", [])
-                for i in range(0, len(pessoas), 50):
-                    _write_blocks(w, pessoas[i:i+50])
-
-                if not pessoas:
-                    w.writerow([])
-                w.writerow(["Registros detalhados"])
-                w.writerow(["Data", "Entrada", "Saída", "Nome",
-                            "Matrícula", "Máquina(Nº)", "Bolsista presente"])
-                w.writerows(dados_norm)
+            caminho = gerar_relatorio_csv(dados, label, titulo)
+            nome_arquivo = os.path.basename(caminho)
         except Exception as e:
             log.error("Falha ao exportar: %s", e)
             self.status("Erro ao exportar.", erro=True)
@@ -1575,9 +1512,14 @@ class App:
                 mostrar_toast(self.root, "Erro na exportação automática.")
             return
 
-        if marcar_mes and marcar_mes not in self.config["exported_months"]:
-            self.config["exported_months"].append(marcar_mes)
-            save_config(self.config)
+        if marcar_mes and marcar_mes not in self.config.get("exported_months", []):
+            self.config.setdefault("exported_months", []).append(marcar_mes)
+            try:
+                save_config(self.config)
+            except Exception as e:
+                log.error("Falha ao salvar config após exportar %s: %s", marcar_mes, e)
+                if marcar_mes in self.config.get("exported_months", []):
+                    self.config["exported_months"].remove(marcar_mes)
 
         self.status(f"Exportado: {nome_arquivo}")
 
@@ -1668,10 +1610,37 @@ class App:
 
 
     def destroy(self):
-        for job in ["_status_job", "_relogio_job", "_from_dialog_job"]:
-            job_id = getattr(self, job, None)
+        for job_attr in ["_status_job", "_relogio_job", "_from_dialog_job", "_novidades_job"]:
+            job_id = getattr(self, job_attr, None)
             if job_id:
                 try:
                     self.root.after_cancel(job_id)
-                except tk.TclError:
+                except (tk.TclError, ValueError):
                     pass
+                setattr(self, job_attr, None)
+
+        # Unbind global Ctrl+Z if they still point to our handler
+        for seq, fid in getattr(self, "_global_binds", []):
+            try:
+                current = self.root.bind_all(seq)
+                if fid and current and fid in current:
+                    self.root.unbind_all(seq)
+            except Exception:
+                pass
+        self._global_binds.clear()
+
+        # Unbind FocusOut handler on root
+        focus_bind = getattr(self, "_focus_out_bind", None)
+        if focus_bind:
+            try:
+                self.root.unbind("<FocusOut>", focus_bind)
+            except Exception:
+                pass
+            self._focus_out_bind = None
+
+        # Clean up root._from_dialog only if it still references this instance
+        if getattr(self.root, "_from_dialog", None) == self._from_dialog:
+            try:
+                delattr(self.root, "_from_dialog")
+            except (AttributeError, tk.TclError):
+                pass

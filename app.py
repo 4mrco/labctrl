@@ -27,6 +27,7 @@ class AppController:
                 widget.destroy()
             
         self.mode = new_mode
+        self.config = load_config()
         
         # Save to config so it persists on restart
         if self.config.get("modo_ui") != self.mode:
@@ -76,7 +77,6 @@ class AppController:
         self.boot_results = run_boot_operations(self.config)
         if self.boot_results.get("export"):
             finalizar_export_silencioso(self.boot_results["export"]["mes"], self.boot_results["export"]["dados"], self.config)
-            save_config(self.config)
         self.boot_completed = True
         
     def setup_dashboard(self):
