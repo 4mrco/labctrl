@@ -78,7 +78,7 @@ class AppController:
         self.current_app = KioskFrame(self.root, on_switch_mode=lambda: self.switch_mode("dashboard"), config=self.config)
         self.current_app.pack(fill="both", expand=True)
 
-        if self.ota_info:
+        if self.ota_info and self.ota_info.get("disponivel"):
             self.current_app.registrar_ota_disponivel(self.ota_info, on_trigger_ota=self._trigger_ota)
         
         # In kiosk, boot operations run silently in background
@@ -117,7 +117,7 @@ class AppController:
             if self.boot_results:
                 # We switched from kiosk to dashboard, show held results
                 self.show_held_boot_results()
-            if self.ota_info and hasattr(self.current_app, "notificar_ota_disponivel"):
+            if self.ota_info and self.ota_info.get("disponivel") and hasattr(self.current_app, "notificar_ota_disponivel"):
                 self.current_app.notificar_ota_disponivel(
                     self.ota_info, on_trigger_ota=self._trigger_ota, abrir_popup=True
                 )
@@ -148,13 +148,14 @@ class AppController:
                 self.current_app.atualizar_bolsista_ui()
 
     def _trigger_ota(self):
-        if not self.ota_info:
+        if not self.ota_info or not self.ota_info.get("disponivel"):
             return
         from ui.dialogs import executar_fluxo_ota_ui
         executar_fluxo_ota_ui(self.root, self.ota_info)
 
     def _on_ota_result(self, info_ota):
-        if not info_ota:
+        if not info_ota or not info_ota.get("disponivel"):
+            self.ota_info = None
             return
         self.ota_info = info_ota
         if not self.current_app:
