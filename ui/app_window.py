@@ -905,7 +905,7 @@ class App:
 
     def notificar_ota_disponivel(self, info_ota: dict, on_trigger_ota=None, abrir_popup: bool = True):
         """Adiciona opção de atualização OTA no menu (⋮) e exibe diálogo se não postergado."""
-        if not info_ota:
+        if not info_ota or not info_ota.get("disponivel"):
             return
         self._ota_info = info_ota
         self._on_trigger_ota = on_trigger_ota

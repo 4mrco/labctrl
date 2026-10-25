@@ -711,6 +711,8 @@ def executar_fluxo_ota_ui(parent: tk.Tk | tk.Toplevel, info_ota: dict, config: d
 def dialog_atualizacao_disponivel(parent: tk.Tk | tk.Toplevel, info_ota: dict, config: dict,
                                   on_confirm_update=None) -> bool:
     """Exibe aviso de nova versão OTA com opções 'Atualizar agora' e 'Agora não'."""
+    if not info_ota or not info_ota.get("disponivel"):
+        return False
     t = TEMAS["default"]
     bg, fg, field = t["bg"], t["fg"], t["field"]
     top_root = parent.winfo_toplevel()
