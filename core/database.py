@@ -147,6 +147,14 @@ def finalizar_registro(rid: int, hora_saida: str | None) -> None:
         )
 
 
+def reabrir_registro(rid: int) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE registros SET saida=NULL, status='ATIVO' WHERE id=?",
+            (rid,),
+        )
+
+
 @safe_query(None)
 def buscar_registro_ativo(matricula: str) -> int | None:
     with get_conn() as conn:

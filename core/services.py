@@ -2,15 +2,20 @@ import sqlite3
 import copy
 import json
 import os
+import re
 import shutil
 import glob
 import subprocess
 import csv
 import logging
+import threading
+import urllib.request
+import urllib.error
+import zipfile
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
-from core.config import CONFIG_FILE, EXPORT_DIR, DB_FILE, BASE_DIR
+from core.config import CONFIG_FILE, EXPORT_DIR, DB_FILE, BASE_DIR, VERSAO_ATUAL
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +32,7 @@ def _get_db():
 DEFAULT_CONFIG = {
     "exported_months": [],
     "ultimo_bolsista": None,
+    "turno_inicio_iso": "",
     "modo_ui": "dashboard",
     "kiosk_fullscreen": False,
     "kiosk_enter_confirm": True,
@@ -39,6 +45,10 @@ DEFAULT_CONFIG = {
     "confirmar_saida": True,
     "backups_diarios": {},
     "orfaos_sem_saida": [],
+    "maquinas_defeito": {},
+    "repo_updater_owner": "4mrco",
+    "repo_updater_name": "labctrl",
+    "ota_postergado_em": "",
 }
 
 
@@ -73,6 +83,9 @@ def load_config() -> dict:
     if "backups_diarios" not in cfg or not isinstance(cfg["backups_diarios"], dict):
         legacy = cfg.get("ultimo_backup", "")
         cfg["backups_diarios"] = {"12": legacy, "17": legacy} if legacy else {}
+
+    if not isinstance(cfg.get("maquinas_defeito"), dict):
+        cfg["maquinas_defeito"] = {}
 
     return cfg
 
@@ -136,6 +149,14 @@ def mes_anterior() -> str:
 PORTUGUESE_CONNECTORS = {"da", "de", "do", "das", "dos", "e"}
 
 
+def validar_entrada_nome(proposed: str, max_len: int = 60) -> bool:
+    if len(proposed) > max_len:
+        return False
+    if any(ch.isdigit() for ch in proposed):
+        return False
+    return True
+
+
 def normalizar_nome(nome: str) -> str:
     """Normalize a name: capitalize first letter of each word, keep connectors lowercase."""
     if not nome:
@@ -153,6 +174,63 @@ def normalizar_nome(nome: str) -> str:
         else:
             resultado.append(palavra_lower)
     return " ".join(resultado)
+
+
+def formatar_dois_nomes(nome_completo: str) -> str:
+    """Retorna apenas os 2 primeiros nomes do bolsista, ignorando conectores."""
+    if not nome_completo:
+        return ""
+    palavras = [p for p in nome_completo.strip().split() if p.lower() not in PORTUGUESE_CONNECTORS]
+    if not palavras:
+        palavras = nome_completo.strip().split()
+    return " ".join(palavras[:2])
+
+
+def normalizar_hora_turno(dt: datetime | None = None) -> str:
+    """Zera minutos, segundos e microssegundos da hora base do turno."""
+    if dt is None:
+        dt = agora()
+    return dt.replace(minute=0, second=0, microsecond=0).isoformat()
+
+
+def iniciar_turno_bolsista(nome: str, config: dict) -> None:
+    """Define o bolsista ativo e grava a hora cheia normalizada do início do turno."""
+    config["ultimo_bolsista"] = nome
+    config["turno_inicio_iso"] = normalizar_hora_turno()
+    save_config(config)
+
+
+def verificar_alerta_turno(config: dict, duracao_horas: int = 2) -> bool:
+    """Retorna True se o turno atual atingiu/ultrapassou duracao_horas ou está ausente/vencido."""
+    iso_str = config.get("turno_inicio_iso")
+    if not iso_str or not isinstance(iso_str, str):
+        return True
+    try:
+        dt_inicio = datetime.fromisoformat(iso_str)
+    except Exception:
+        return True
+    now = agora()
+    if dt_inicio.date() < now.date():
+        return True
+    return (now - dt_inicio) >= timedelta(hours=duracao_horas)
+
+
+def registrar_defeito_maquina(config: dict, maquina: str, motivo: str) -> None:
+    """Registra defeito ativo para uma máquina em config['maquinas_defeito']."""
+    defeitos = config.setdefault("maquinas_defeito", {})
+    if not isinstance(defeitos, dict):
+        defeitos = {}
+        config["maquinas_defeito"] = defeitos
+    defeitos[str(maquina)] = str(motivo)
+    save_config(config)
+
+
+def resolver_defeito_maquina(config: dict, maquina: str) -> None:
+    """Remove o defeito registrado de uma máquina em config['maquinas_defeito']."""
+    defeitos = config.get("maquinas_defeito")
+    if isinstance(defeitos, dict) and str(maquina) in defeitos:
+        defeitos.pop(str(maquina), None)
+        save_config(config)
 
 
 def datas_semana_atual() -> list[str]:
@@ -393,6 +471,54 @@ def processar_entrada(matricula: str | None, nome: str, maquina: str, bolsista: 
     return {"status": "entrada_registrada", "rid": rid, "nome": nome, "hora": now.strftime("%H:%M")}
 
 
+def processar_entrada_com_despejo(
+    matricula: str | None,
+    nome: str,
+    machine: str,
+    bolsista: str,
+    ocupantes_atuais: list[tuple[str, str, int]],
+    config: dict,
+) -> dict:
+    """Finaliza sessões abandonadas dos ocupantes anteriores da máquina,
+    adiciona suas matrículas em config['orfaos_sem_saida'], registra a nova
+    entrada do aluno atual e retorna payload compatível com reverter_acao.
+    """
+    db = _get_db()
+    if matricula:
+        rid_ativo = db.buscar_registro_ativo(matricula)
+        if rid_ativo:
+            return {"status": "ja_ativo", "rid_ativo": rid_ativo, "nome": nome}
+
+    hora_atual = agora().strftime("%H:%M")
+    orfaos_sem_saida = config.setdefault("orfaos_sem_saida", [])
+    if not isinstance(orfaos_sem_saida, list):
+        orfaos_sem_saida = []
+        config["orfaos_sem_saida"] = orfaos_sem_saida
+
+    encerrados: list[int] = []
+    orfaos_adicionados: list[str] = []
+
+    for _nome_ant, mat_ant, rid_ant in ocupantes_atuais:
+        db.finalizar_registro(rid_ant, hora_atual)
+        encerrados.append(rid_ant)
+        if mat_ant and mat_ant not in orfaos_sem_saida:
+            orfaos_sem_saida.append(mat_ant)
+            orfaos_adicionados.append(mat_ant)
+
+    save_config(config)
+    res_ent = processar_entrada(matricula, nome, machine, bolsista)
+    novo_rid = res_ent["rid"]
+    return {
+        "status": "entrada_registrada",
+        "tipo": "despejo_entrada",
+        "rid": novo_rid,
+        "nome": nome,
+        "hora": res_ent["hora"],
+        "encerrados": encerrados,
+        "orfaos_adicionados": orfaos_adicionados,
+    }
+
+
 # ─────────────────────────────────────────────
 # SERVIÇO: DESFAZER (UNDO)
 # ─────────────────────────────────────────────
@@ -414,12 +540,23 @@ def reverter_acao(acao: dict) -> str:
 
     elif tipo == "saida":
         # desfaz: volta status ATIVO, apaga saída
-        with db.get_conn() as conn:
-            conn.execute(
-                "UPDATE registros SET saida=NULL, status='ATIVO' WHERE id=?",
-                (acao["rid"],),
-            )
+        db.reabrir_registro(acao["rid"])
         return f"Saída de {acao['nome']} desfeita."
+
+    elif tipo == "despejo_entrada":
+        db.deletar_registro(acao["rid"])
+        for rid_ant in acao.get("encerrados", []):
+            db.reabrir_registro(rid_ant)
+        orfaos_add = acao.get("orfaos_adicionados", [])
+        if orfaos_add:
+            cfg = load_config()
+            orfaos_atuais = cfg.get("orfaos_sem_saida", [])
+            if isinstance(orfaos_atuais, list):
+                cfg["orfaos_sem_saida"] = [m for m in orfaos_atuais if m not in orfaos_add]
+                save_config(cfg)
+            if isinstance(acao.get("config"), dict):
+                acao["config"]["orfaos_sem_saida"] = list(cfg.get("orfaos_sem_saida", []))
+        return f"Entrada de {acao['nome']} desfeita e sessão anterior restaurada."
 
     elif tipo == "remocao":
         # desfaz: recria o registro deletado
@@ -687,4 +824,329 @@ def finalizar_export_silencioso(mes: str, dados: list, config: dict) -> str | No
             return None
 
     return nome_arquivo
-        
+
+
+# ─────────────────────────────────────────────
+# SERVIÇO: ATUALIZAÇÃO OTA (GITHUB RELEASES)
+# ─────────────────────────────────────────────
+
+_SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+
+OTA_ROOT_FILES = ("app.py", "CHANGELOG.md", "README.md", "LICENSE")
+OTA_DIRS_EXTS = {
+    "core": (".py",),
+    "ui": (".py",),
+    "layouts": (".json",),
+    "hardware": (".py",),
+}
+OTA_REQUIRED_FILES = (
+    "app.py",
+    "core/config.py",
+    "core/database.py",
+    "core/services.py",
+    "ui/app_window.py",
+    "ui/kiosk.py",
+    "ui/dialogs.py",
+    "layouts/lab_informatica.json",
+)
+OTA_PROTECTED_NAMES = {
+    "lab.db",
+    "config.json",
+    "exports",
+    "backups",
+    ".git",
+    ".gitignore",
+    ".agents",
+    "PROJECT_STATE.md",
+    "docs",
+    "temp",
+}
+
+
+def parse_semver(ver_str: str) -> tuple[int, int, int] | None:
+    """Converte string SemVer estrita ('v1.4.0' ou '1.4.0') em tupla (major, minor, patch)."""
+    if not ver_str or not isinstance(ver_str, str):
+        return None
+    s = ver_str.strip()
+    if s.startswith(("v", "V")):
+        s = s[1:]
+    m = _SEMVER_RE.fullmatch(s)
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+
+
+def comparar_versoes_ota(remote_tag: str, local_ver: str = VERSAO_ATUAL) -> bool:
+    """Retorna True se remote_tag for uma versão SemVer estrita maior que local_ver."""
+    rem = parse_semver(remote_tag)
+    loc = parse_semver(local_ver)
+    if rem is None or loc is None:
+        return False
+    return rem > loc
+
+
+def postergar_ota_hoje(config: dict) -> None:
+    """Grava a data de hoje em config['ota_postergado_em'] para suprimir novos avisos no dia."""
+    config["ota_postergado_em"] = agora().strftime("%Y-%m-%d")
+    save_config(config)
+
+
+def verificar_atualizacao_ota(config: dict, opener=None) -> dict:
+    """Consulta a última release no GitHub (timeout 5s, falha 100% silenciosa).
+
+    Retorna dict:
+      {"disponivel": False} ou
+      {"disponivel": True, "versao_nova": str, "tag_name": str, "zipball_url": str, "notas": str}
+    """
+    owner = (config.get("repo_updater_owner") or "4mrco").strip()
+    repo = (config.get("repo_updater_name") or "labctrl").strip()
+    if not owner or not repo:
+        return {"disponivel": False}
+
+    url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "LabCTRL-OTA",
+        },
+    )
+    open_fn = opener if opener is not None else urllib.request.urlopen
+
+    try:
+        with open_fn(req, timeout=5) as resp:
+            status = getattr(resp, "status", 200)
+            if status != 200:
+                return {"disponivel": False}
+            raw = resp.read().decode("utf-8")
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return {"disponivel": False}
+        tag_name = str(data.get("tag_name") or "").strip()
+        zipball_url = str(data.get("zipball_url") or "").strip()
+        if not tag_name or not zipball_url:
+            return {"disponivel": False}
+        if not comparar_versoes_ota(tag_name, VERSAO_ATUAL):
+            return {"disponivel": False}
+        rem_tuple = parse_semver(tag_name)
+        versao_str = f"{rem_tuple[0]}.{rem_tuple[1]}.{rem_tuple[2]}"
+        return {
+            "disponivel": True,
+            "versao_nova": versao_str,
+            "tag_name": tag_name,
+            "zipball_url": zipball_url,
+            "notas": str(data.get("body") or ""),
+        }
+    except Exception:
+        return {"disponivel": False}
+
+
+def iniciar_verificacao_ota_async(config: dict, callback) -> threading.Thread:
+    """Dispara verificação OTA em thread daemon e invoca callback(resultado)."""
+    def _worker():
+        res = verificar_atualizacao_ota(config)
+        if callback:
+            try:
+                callback(res)
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    return t
+
+
+def baixar_pacote_ota(zipball_url: str, dest_zip_path: str, opener=None) -> str:
+    """Baixa zipball_url via HTTPS de forma atômica para dest_zip_path."""
+    if not zipball_url or not str(zipball_url).startswith("https://"):
+        raise ValueError("URL de atualização inválida (deve utilizar HTTPS).")
+    os.makedirs(os.path.dirname(os.path.abspath(dest_zip_path)), exist_ok=True)
+    tmp_zip = f"{dest_zip_path}.tmp"
+    req = urllib.request.Request(
+        zipball_url,
+        headers={"User-Agent": "LabCTRL-OTA"},
+    )
+    open_fn = opener if opener is not None else urllib.request.urlopen
+    try:
+        with open_fn(req, timeout=30) as resp:
+            status = getattr(resp, "status", 200)
+            if status != 200:
+                raise RuntimeError(f"Download falhou com status HTTP {status}.")
+            with open(tmp_zip, "wb") as f:
+                shutil.copyfileobj(resp, f)
+                f.flush()
+                os.fsync(f.fileno())
+        os.replace(tmp_zip, dest_zip_path)
+    except Exception:
+        if os.path.exists(tmp_zip):
+            try:
+                os.remove(tmp_zip)
+            except OSError:
+                pass
+        raise
+    return dest_zip_path
+
+
+def validar_e_extrair_zip_ota(zip_path: str, extract_dir: str) -> str:
+    """Valida integridade e segurança do ZIP (rejeitando path traversal e symlinks),
+    extrai em extract_dir, localiza o diretório-raiz único do GitHub e valida arquivos essenciais.
+    Retorna o caminho de candidate_root.
+    """
+    if not os.path.isfile(zip_path) or not zipfile.is_zipfile(zip_path):
+        raise ValueError("O arquivo de atualização não é um arquivo ZIP válido.")
+
+    shutil.rmtree(extract_dir, ignore_errors=True)
+    os.makedirs(extract_dir, exist_ok=True)
+    real_extract_dir = os.path.realpath(extract_dir)
+
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        corrompido = zf.testzip()
+        if corrompido is not None:
+            raise ValueError(f"Arquivo corrompido dentro do ZIP: {corrompido}")
+
+        infos = zf.infolist()
+        if not infos:
+            raise ValueError("Arquivo ZIP vazio.")
+
+        for info in infos:
+            raw_name = info.filename
+            if not raw_name or raw_name.startswith(("/", "\\")) or "\\" in raw_name:
+                raise ValueError(f"Entrada de caminho inseguro no ZIP: {raw_name!r}")
+            parts = [p for p in raw_name.split("/") if p]
+            if not parts or ".." in parts or "." in parts:
+                raise ValueError(f"Segmento de path traversal detectado no ZIP: {raw_name!r}")
+            unix_mode = (info.external_attr >> 16) & 0o170000
+            if unix_mode == 0o120000:
+                raise ValueError(f"Link simbólico rejeitado no ZIP: {raw_name!r}")
+            target_path = os.path.realpath(os.path.join(real_extract_dir, *parts))
+            if os.path.commonpath([real_extract_dir, target_path]) != real_extract_dir or target_path == real_extract_dir:
+                raise ValueError(f"Tentativa de extração fora do diretório de staging: {raw_name!r}")
+
+        for info in infos:
+            parts = [p for p in info.filename.split("/") if p]
+            target_path = os.path.join(real_extract_dir, *parts)
+            if info.is_dir() or info.filename.endswith("/"):
+                os.makedirs(target_path, exist_ok=True)
+            else:
+                os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                with zf.open(info, "r") as src, open(target_path, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+
+    top_entries = [os.path.join(real_extract_dir, e) for e in os.listdir(real_extract_dir)]
+    top_dirs = [d for d in top_entries if os.path.isdir(d)]
+    if len(top_dirs) == 1 and len(top_entries) == 1:
+        candidate_root = top_dirs[0]
+    else:
+        raise ValueError("Pacote de release inválido: deve conter um único diretório-raiz.")
+
+    for req_rel in OTA_REQUIRED_FILES:
+        req_abs = os.path.join(candidate_root, *req_rel.split("/"))
+        if not os.path.isfile(req_abs):
+            raise ValueError(f"Arquivo essencial ausente no pacote OTA: {req_rel}")
+
+    return candidate_root
+
+
+def coletar_arquivos_whitelist(root_dir: str) -> list[str]:
+    """Retorna lista ordenada de caminhos relativos pertencentes à whitelist existentes em root_dir."""
+    elegiveis: list[str] = []
+    for fname in OTA_ROOT_FILES:
+        fpath = os.path.join(root_dir, fname)
+        if os.path.isfile(fpath) and not os.path.islink(fpath):
+            elegiveis.append(fname)
+
+    for subdir, exts in OTA_DIRS_EXTS.items():
+        dpath = os.path.join(root_dir, subdir)
+        if not os.path.isdir(dpath) or os.path.islink(dpath):
+            continue
+        for entry in sorted(os.listdir(dpath)):
+            full = os.path.join(dpath, entry)
+            if os.path.isfile(full) and not os.path.islink(full) and entry.endswith(exts):
+                elegiveis.append(f"{subdir}/{entry}")
+
+    return elegiveis
+
+
+def _copiar_arquivo_atomico_ota(src_file: str, dst_file: str) -> None:
+    os.makedirs(os.path.dirname(os.path.abspath(dst_file)), exist_ok=True)
+    tmp_dst = f"{dst_file}.ota.tmp"
+    try:
+        with open(src_file, "rb") as fsrc, open(tmp_dst, "wb") as fdst:
+            shutil.copyfileobj(fsrc, fdst)
+            fdst.flush()
+            os.fsync(fdst.fileno())
+        os.replace(tmp_dst, dst_file)
+    except Exception:
+        if os.path.exists(tmp_dst):
+            try:
+                os.remove(tmp_dst)
+            except OSError:
+                pass
+        raise
+
+
+def aplicar_atualizacao_ota(candidate_root: str, base_dir: str = BASE_DIR) -> None:
+    """Cria snapshot de rollback em temp/ota/rollback/ e substitui atomicamente
+    apenas os arquivos da whitelist em base_dir. Em caso de falha parcial,
+    restaura a versão anterior a partir do rollback.
+    """
+    for req_rel in OTA_REQUIRED_FILES:
+        req_abs = os.path.join(candidate_root, *req_rel.split("/"))
+        if not os.path.isfile(req_abs):
+            raise ValueError(f"Arquivo essencial ausente em candidate_root: {req_rel}")
+
+    novos_rel = coletar_arquivos_whitelist(candidate_root)
+    if not novos_rel:
+        raise ValueError("Nenhum arquivo elegível encontrado na whitelist do pacote.")
+
+    rollback_dir = os.path.join(base_dir, "temp", "ota", "rollback")
+    shutil.rmtree(rollback_dir, ignore_errors=True)
+    os.makedirs(rollback_dir, exist_ok=True)
+
+    atuais_rel = coletar_arquivos_whitelist(base_dir)
+    for rel in atuais_rel:
+        src_cur = os.path.join(base_dir, *rel.split("/"))
+        dst_rb = os.path.join(rollback_dir, *rel.split("/"))
+        _copiar_arquivo_atomico_ota(src_cur, dst_rb)
+
+    try:
+        for rel in novos_rel:
+            top_seg = rel.split("/")[0]
+            if top_seg in OTA_PROTECTED_NAMES or rel.endswith((".db", ".log", ".tmp")):
+                continue
+            src_new = os.path.join(candidate_root, *rel.split("/"))
+            dst_inst = os.path.join(base_dir, *rel.split("/"))
+            _copiar_arquivo_atomico_ota(src_new, dst_inst)
+    except Exception as e:
+        log.error("Falha durante aplicação OTA; iniciando rollback: %s", e)
+        for rel in atuais_rel:
+            rb_src = os.path.join(rollback_dir, *rel.split("/"))
+            rb_dst = os.path.join(base_dir, *rel.split("/"))
+            if os.path.isfile(rb_src):
+                try:
+                    _copiar_arquivo_atomico_ota(rb_src, rb_dst)
+                except Exception as rb_err:
+                    log.error("Erro ao restaurar %s no rollback: %s", rel, rb_err)
+        raise RuntimeError(f"A atualização falhou e a versão anterior foi restaurada ({e}).") from e
+
+
+def baixar_e_aplicar_ota(zipball_url: str, base_dir: str = BASE_DIR, opener=None) -> None:
+    """Executa o fluxo completo de download, validação, extração, backup de rollback,
+    aplicação da whitelist e limpeza de staging.
+    """
+    ota_dir = os.path.join(base_dir, "temp", "ota")
+    os.makedirs(ota_dir, exist_ok=True)
+    zip_path = os.path.join(ota_dir, "release.zip")
+    extract_dir = os.path.join(ota_dir, "extracted")
+
+    baixar_pacote_ota(zipball_url, zip_path, opener=opener)
+    candidate_root = validar_e_extrair_zip_ota(zip_path, extract_dir)
+    aplicar_atualizacao_ota(candidate_root, base_dir=base_dir)
+
+    # Limpeza pós-sucesso (preservando temp/ota/rollback/)
+    if os.path.exists(zip_path):
+        try:
+            os.remove(zip_path)
+        except OSError:
+            pass
+    shutil.rmtree(extract_dir, ignore_errors=True)

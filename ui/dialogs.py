@@ -241,7 +241,9 @@ def mostrar_sobre(parent: tk.Tk | tk.Toplevel):
 
 
 
-def pedir_input(parent: tk.Tk | tk.Toplevel, titulo: str, mensagem: str, valor_inicial: str = "") -> str | None:
+def pedir_input(parent: tk.Tk | tk.Toplevel, titulo: str, mensagem: str, valor_inicial: str = "",
+                validar_nome: bool = True) -> str | None:
+    from core.services import validar_entrada_nome
     t = TEMAS["default"]
     bg, fg, field = t["bg"], t["fg"], t["field"]
     win = tk.Toplevel(parent)
@@ -256,6 +258,9 @@ def pedir_input(parent: tk.Tk | tk.Toplevel, titulo: str, mensagem: str, valor_i
     if valor_inicial:
         entry.insert(0, valor_inicial)
         entry.select_range(0, tk.END)
+    if validar_nome:
+        vcmd = (win.register(validar_entrada_nome), "%P")
+        entry.configure(validate="key", validatecommand=vcmd)
 
     resultado = {"valor": None}
 
@@ -275,6 +280,7 @@ def pedir_input(parent: tk.Tk | tk.Toplevel, titulo: str, mensagem: str, valor_i
 
 
 def pedir_nome_com_matricula(parent: tk.Tk | tk.Toplevel, matricula: str) -> tuple[str, str] | None:
+    from core.services import validar_entrada_nome
     t = TEMAS["default"]
     bg, fg, field = t["bg"], t["fg"], t["field"]
     win = tk.Toplevel(parent)
@@ -292,7 +298,9 @@ def pedir_nome_com_matricula(parent: tk.Tk | tk.Toplevel, matricula: str) -> tup
 
     tk.Label(win, text="Insira seu nome", bg=bg, fg=fg,
              font=("Segoe UI", 10, "bold")).grid(row=1, column=0, sticky="w", padx=12, pady=(8, 2))
-    entry_nome = tk.Entry(win, width=28, bd=0, highlightthickness=0, bg=field, fg=fg)
+    vcmd = (win.register(validar_entrada_nome), "%P")
+    entry_nome = tk.Entry(win, width=28, bd=0, highlightthickness=0, bg=field, fg=fg,
+                          validate="key", validatecommand=vcmd)
     entry_nome.grid(row=1, column=1, padx=12, pady=(8, 2))
 
     resultado = {"valor": None}
@@ -427,6 +435,7 @@ def dialog_fechar_com_ativos(parent: tk.Tk | tk.Toplevel, ativos: int) -> str:
 
 def popup_sem_matricula(parent: tk.Tk | tk.Toplevel) -> tuple[str, str] | None:
     """Retorna (nome, tipo) ou None se cancelado."""
+    from core.services import validar_entrada_nome
     t = TEMAS["default"]
     bg, fg, field = t["bg"], t["fg"], t["field"]
     win = tk.Toplevel(parent)
@@ -435,7 +444,9 @@ def popup_sem_matricula(parent: tk.Tk | tk.Toplevel) -> tuple[str, str] | None:
     setup_dialog(win, parent, min_width=320, min_height=140)
 
     tk.Label(win, text="Nome:", bg=bg, fg=fg).grid(row=0, column=0, sticky="w", padx=10, pady=(12, 4))
-    entry_nome = tk.Entry(win, width=28, bd=0, highlightthickness=0, bg=field, fg=fg)
+    vcmd = (win.register(validar_entrada_nome), "%P")
+    entry_nome = tk.Entry(win, width=28, bd=0, highlightthickness=0, bg=field, fg=fg,
+                          validate="key", validatecommand=vcmd)
     entry_nome.grid(row=0, column=1, padx=10, pady=(12, 4))
 
     tk.Label(win, text="Tipo:", bg=bg, fg=fg).grid(row=1, column=0, sticky="w", padx=10, pady=4)
@@ -471,7 +482,9 @@ def popup_sem_matricula(parent: tk.Tk | tk.Toplevel) -> tuple[str, str] | None:
 from tkinter import ttk, messagebox, filedialog
 import csv
 import logging
+import threading
 from datetime import datetime
+from core.config import VERSAO_ATUAL
 from core.database import (
     buscar_registro_por_id, atualizar_registro, buscar_meses,
     buscar_registros_por_mes, buscar_bolsistas, inserir_bolsista,
@@ -479,9 +492,277 @@ from core.database import (
     get_conn, buscar_export_mes, buscar_export_dia, buscar_export_ontem,
     buscar_export_semana
 )
-from core.services import agora, datas_semana_atual
+from core.services import (
+    agora, datas_semana_atual, iniciar_turno_bolsista,
+    postergar_ota_hoje, baixar_e_aplicar_ota
+)
 
 log = logging.getLogger(__name__)
+
+
+def popup_selecionar_bolsista(parent: tk.Tk | tk.Toplevel, config: dict) -> str | None:
+    """Modal para selecionar o bolsista responsável pelo turno atual (1 clique ou Enter)."""
+    bolsistas = buscar_bolsistas()
+    if not bolsistas:
+        return None
+
+    t = TEMAS["default"]
+    bg, fg, field, select = t["bg"], t["fg"], t["field"], t["select"]
+    ativo_bg = t["ativo_bg"]
+
+    win = tk.Toplevel(parent)
+    win.title("Selecionar Bolsista do Turno")
+    win.configure(bg=bg)
+    setup_dialog(win, parent, min_width=360, min_height=200,
+                 resizable=(False, False), escape_close=True)
+
+    tk.Label(win, text="Selecione o bolsista presente no turno:",
+             bg=bg, fg=fg, font=("Segoe UI", 11, "bold")).pack(padx=20, pady=(16, 10))
+
+    list_frame = tk.Frame(win, bg=bg)
+    list_frame.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+
+    ultimo = config.get("ultimo_bolsista")
+    default_bol = ultimo if ultimo in bolsistas else bolsistas[0]
+    resultado = {"nome": None}
+
+    def escolher(nome_escolhido: str):
+        iniciar_turno_bolsista(nome_escolhido, config)
+        resultado["nome"] = nome_escolhido
+        win.destroy()
+
+    for b in bolsistas:
+        is_current = (b == default_bol)
+        btn = tk.Button(
+            list_frame,
+            text=b,
+            command=lambda n=b: escolher(n),
+            bd=0,
+            highlightthickness=1 if is_current else 0,
+            highlightbackground="#5B9BD5" if is_current else field,
+            bg=ativo_bg if is_current else field,
+            fg=fg,
+            activebackground=select,
+            activeforeground=fg,
+            font=("Segoe UI", 10, "bold" if is_current else "normal"),
+            padx=14,
+            pady=7,
+            cursor="hand2",
+            anchor="w",
+        )
+        btn.pack(fill="x", pady=3)
+
+    bottom = tk.Frame(win, bg=bg)
+    bottom.pack(fill="x", padx=20, pady=(4, 16))
+    btn_confirm = tk.Button(
+        bottom,
+        text=f"Confirmar ({default_bol})",
+        command=lambda: escolher(default_bol),
+        bd=0,
+        highlightthickness=0,
+        bg="#35383e",
+        fg=fg,
+        padx=14,
+        pady=6,
+        font=("Segoe UI", 9, "bold"),
+        cursor="hand2",
+    )
+    btn_confirm.pack(side="left", expand=True, fill="x", padx=(0, 4))
+
+    btn_cancel = tk.Button(
+        bottom,
+        text="Fechar",
+        command=win.destroy,
+        bd=0,
+        highlightthickness=0,
+        bg="#2a2d32",
+        fg="#aaa",
+        padx=12,
+        pady=6,
+        font=("Segoe UI", 9),
+        cursor="hand2",
+    )
+    btn_cancel.pack(side="right", padx=(4, 0))
+
+    win.bind("<Return>", lambda _: escolher(default_bol))
+    win.bind("<KP_Enter>", lambda _: escolher(default_bol))
+    win.wait_window()
+    return resultado["nome"]
+
+
+def dialog_reinicio_obrigatorio_ota(parent: tk.Tk | tk.Toplevel, versao_nova: str) -> None:
+    """Modal bloqueante exibido após aplicação OTA bem-sucedida."""
+    t = TEMAS["default"]
+    bg, fg = t["bg"], t["fg"]
+    top_root = parent.winfo_toplevel()
+
+    win = tk.Toplevel(top_root)
+    win.title("Atualização Concluída")
+    win.configure(bg=bg)
+    setup_dialog(win, top_root, min_width=440, min_height=180,
+                 resizable=(False, False), escape_close=False)
+
+    def encerrar():
+        try:
+            top_root.destroy()
+        except Exception:
+            os._exit(0)
+
+    win.protocol("WM_DELETE_WINDOW", encerrar)
+
+    msg = (
+        f"Atualização para a versão v{versao_nova} concluída com sucesso. "
+        f"Feche o LabCTRL e abra-o novamente para carregar a nova versão."
+    )
+    tk.Label(win, text=msg, bg=bg, fg=fg, wraplength=400, justify="center",
+             font=("Segoe UI", 10, "bold")).pack(padx=24, pady=(24, 18))
+
+    btn_close = tk.Button(
+        win,
+        text="Fechar LabCTRL",
+        command=encerrar,
+        bd=0,
+        highlightthickness=0,
+        bg="#2e5b88",
+        fg="#ffffff",
+        padx=24,
+        pady=8,
+        font=("Segoe UI", 10, "bold"),
+        cursor="hand2",
+    )
+    btn_close.pack(pady=(0, 20))
+    win.bind("<Return>", lambda _: encerrar())
+    win.bind("<KP_Enter>", lambda _: encerrar())
+    win.wait_window()
+
+
+def executar_fluxo_ota_ui(parent: tk.Tk | tk.Toplevel, info_ota: dict, config: dict) -> None:
+    """Exibe progresso do download/aplicação OTA em thread separada e abre tela de reinício."""
+    t = TEMAS["default"]
+    bg, fg = t["bg"], t["fg"]
+    top_root = parent.winfo_toplevel()
+    versao_nova = info_ota.get("versao_nova", "")
+    zipball_url = info_ota.get("zipball_url", "")
+
+    wait_win = tk.Toplevel(top_root)
+    wait_win.title("Atualizando LabCTRL")
+    wait_win.configure(bg=bg)
+    setup_dialog(wait_win, top_root, min_width=380, min_height=140,
+                 resizable=(False, False), escape_close=False)
+    wait_win.protocol("WM_DELETE_WINDOW", lambda: None)
+
+    tk.Label(
+        wait_win,
+        text=f"Baixando e aplicando versão v{versao_nova}...\nNão desligue o computador.",
+        bg=bg,
+        fg=fg,
+        justify="center",
+        font=("Segoe UI", 10),
+    ).pack(padx=24, pady=36)
+
+    def _on_done(erro: Exception | None):
+        try:
+            wait_win.destroy()
+        except Exception:
+            pass
+        if erro is not None:
+            messagebox.showerror("Falha na Atualização", str(erro), parent=top_root)
+        else:
+            dialog_reinicio_obrigatorio_ota(top_root, versao_nova)
+
+    def _worker():
+        err = None
+        try:
+            baixar_e_aplicar_ota(zipball_url)
+        except Exception as e:
+            err = e
+        try:
+            top_root.after(0, lambda: _on_done(err))
+        except Exception:
+            pass
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def dialog_atualizacao_disponivel(parent: tk.Tk | tk.Toplevel, info_ota: dict, config: dict,
+                                  on_confirm_update=None) -> bool:
+    """Exibe aviso de nova versão OTA com opções 'Atualizar agora' e 'Agora não'."""
+    t = TEMAS["default"]
+    bg, fg, field = t["bg"], t["fg"], t["field"]
+    top_root = parent.winfo_toplevel()
+    versao_nova = info_ota.get("versao_nova", "")
+
+    win = tk.Toplevel(top_root)
+    win.title("Atualização Disponível")
+    win.configure(bg=bg)
+    setup_dialog(win, top_root, min_width=420, min_height=180,
+                 resizable=(False, False), escape_close=True)
+
+    tk.Label(
+        win,
+        text=f"Nova versão disponível: v{versao_nova} (atual: v{VERSAO_ATUAL})",
+        bg=bg,
+        fg=fg,
+        font=("Segoe UI", 11, "bold"),
+    ).pack(padx=20, pady=(20, 8))
+
+    tk.Label(
+        win,
+        text="Deseja baixar e aplicar a atualização agora?\nOs dados locais e configurações serão preservados.",
+        bg=bg,
+        fg="#B5BAC1",
+        justify="center",
+        font=("Segoe UI", 9),
+    ).pack(padx=20, pady=(0, 16))
+
+    resultado = {"atualizar": False}
+
+    def atualizar_agora():
+        resultado["atualizar"] = True
+        win.destroy()
+
+    def agora_nao():
+        postergar_ota_hoje(config)
+        win.destroy()
+
+    btn_frame = tk.Frame(win, bg=bg)
+    btn_frame.pack(pady=(0, 18))
+
+    tk.Button(
+        btn_frame,
+        text="Atualizar agora",
+        command=atualizar_agora,
+        bd=0,
+        highlightthickness=0,
+        bg="#2e5b88",
+        fg="#ffffff",
+        padx=18,
+        pady=7,
+        font=("Segoe UI", 10, "bold"),
+        cursor="hand2",
+    ).pack(side="left", padx=6)
+
+    tk.Button(
+        btn_frame,
+        text="Agora não",
+        command=agora_nao,
+        bd=0,
+        highlightthickness=0,
+        bg=field,
+        fg=fg,
+        padx=18,
+        pady=7,
+        font=("Segoe UI", 10),
+        cursor="hand2",
+    ).pack(side="left", padx=6)
+
+    win.wait_window()
+    if resultado["atualizar"]:
+        if on_confirm_update:
+            on_confirm_update()
+        else:
+            executar_fluxo_ota_ui(top_root, info_ota, config)
+    return resultado["atualizar"]
 
 def gerar_csv(dados: list[tuple]) -> str:
     """Gera CSV com cabeçalho e dados na ordem exigida."""
@@ -969,10 +1250,14 @@ def abrir_form_edicao(parent, rid: int, on_success_callback=None):
         ("Saída (HH:MM)",       saida or ""),
         ("Máquina",             "ML" if str(maquina).startswith("ML-") else (maquina or "")),
     ]
+    from core.services import validar_entrada_nome
+    vcmd_nome = (win.register(validar_entrada_nome), "%P")
     for i, (label, valor) in enumerate(defs):
         tk.Label(win, text=label, bg=bg, fg=fg).grid(row=i, column=0, sticky="w", padx=10, pady=4)
         e = tk.Entry(win, width=20, bd=0, highlightthickness=0, bg=field, fg=fg)
         e.insert(0, valor)
+        if label == "Nome":
+            e.configure(validate="key", validatecommand=vcmd_nome)
         e.grid(row=i, column=1, padx=10, pady=4)
         campos[label] = e
         ordem_campos.append(e)
