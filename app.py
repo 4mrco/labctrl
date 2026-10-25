@@ -190,7 +190,7 @@ def main():
     args = parser.parse_args()
     
     config = load_config()
-    mode = args.mode or config.get("modo_ui", "dashboard")
+    mode = args.mode or config.get("modo_ui", "kiosk")
     
     root = tk.Tk()
     controller = AppController(root, mode)

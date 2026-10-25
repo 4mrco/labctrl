@@ -24,6 +24,7 @@ from core.config import TEMAS
 from core.database import (
     buscar_aluno, buscar_registro_ativo, buscar_registro_por_id,
     buscar_registros_por_mes, buscar_ultimo_registro, finalizar_registro, inserir_aluno,
+    contar_ativos,
 )
 from core.services import (
     agora, formatar_dois_nomes, gerar_id_servidor, iniciar_turno_bolsista,
@@ -31,10 +32,12 @@ from core.services import (
     processar_entrada_com_despejo, registrar_defeito_maquina,
     resolver_defeito_maquina, reverter_acao, save_config,
     validar_entrada_nome, verificar_alerta_turno, verificar_e_executar_backups,
+    encerrar_ativos_fechamento,
 )
 from ui.dialogs import (
     popup_sem_matricula, abrir_form_edicao, mostrar_toast,
     popup_selecionar_bolsista, dialog_atualizacao_disponivel,
+    dialog_fechar_com_ativos,
 )
 
 # ── Map Active Palette & Constants (Kiosk Canonical) ─────────────────────
@@ -88,6 +91,8 @@ TOAST_STYLES = {
 }
 EXIT_BTN_BG = "#6B2D3A"
 CANCEL_BTN_BG = "#2A2224"
+REPORT_BTN_BG = "#2D2618"
+REPORT_BTN_FG = "#F0A500"
 
 WARN_SECONDS = 15
 CONFIRM_TIMEOUT_S = 15        # confirmação de saída por clique expira sozinha
@@ -203,6 +208,7 @@ class KioskFrame(tk.Frame):
         ]
 
         top = self.winfo_toplevel()
+        top.protocol("WM_DELETE_WINDOW", self.fechar_aplicacao)
         for seq, handler in (("<Key>", self._on_key),
                              ("<Control-z>", self._desfazer),
                              ("<Control-Z>", self._desfazer)):
@@ -386,21 +392,36 @@ class KioskFrame(tk.Frame):
         # BASE (empacotado antes do centro para reservar espaço)
         bottom = tk.Frame(self, bg=BG)
         bottom.pack(side="bottom", fill="x", padx=30, pady=(5, 16))
+        bottom.columnconfigure(0, weight=1, uniform="b")
+        bottom.columnconfigure(1, weight=0)
+        bottom.columnconfigure(2, weight=1, uniform="b")
+
+        # Botões centrais perfeitamente centralizados na base
+        # Padrão: Sem matrícula | Cancelar | Escolher depois
         btn_frame = tk.Frame(bottom, bg=BG)
-        btn_frame.pack(expand=True)
+        btn_frame.grid(row=0, column=1, sticky="s")
+
         self._btn_semmat = self._make_button(btn_frame, "Sem matrícula", self._on_sem_matricula,
                                              width=16)
         self._btn_semmat.pack(side="left", padx=(0, 10))
-        self._btn_defeito = self._make_button(btn_frame, "Reportar defeito", self._on_reportar_defeito,
-                                              width=16)
-        self._btn_defeito.pack(side="left", padx=(0, 10))
-        self._btn_sem = self._make_button(btn_frame, "Escolher depois", self._sem_maquina, width=18)
-        self._btn_sem.pack(side="left", padx=(0, 10))
+
         self._btn_clear = self._make_button(btn_frame, "Cancelar", self._reset, width=14,
                                             bg=CANCEL_BTN_BG)
-        self._btn_clear.pack(side="left")
-        self._btn_undo = self._make_button(bottom, "↶", self._desfazer, width=3)
-        self._btn_undo.pack(side="right", padx=(0, 10))
+        self._btn_clear.pack(side="left", padx=(0, 10))
+
+        self._btn_sem = self._make_button(btn_frame, "Escolher depois", self._sem_maquina, width=18)
+        self._btn_sem.pack(side="left")
+
+        # Ações no canto inferior direito: Desfazer (acima) e Reportar defeito (na base horizontal)
+        right_actions = tk.Frame(bottom, bg=BG)
+        right_actions.grid(row=0, column=2, sticky="se")
+
+        self._btn_undo = self._make_button(right_actions, "↶", self._desfazer, width=3, pady=5)
+        self._btn_undo.pack(side="top", anchor="e", pady=(0, 6))
+
+        self._btn_defeito = self._make_button(right_actions, "Reportar defeito", self._on_reportar_defeito,
+                                              width=16, bg=REPORT_BTN_BG, fg=REPORT_BTN_FG)
+        self._btn_defeito.pack(side="bottom", anchor="e")
 
         # CENTRO
         middle = tk.Frame(self, bg=BG)
@@ -416,11 +437,11 @@ class KioskFrame(tk.Frame):
                                        font=self._f(12), height=1, pady=8)
         self._lbl_shortcuts.pack(side="bottom", fill="x")
 
-    def _make_button(self, parent, text, command, width=None, pady=14, bg=None):
+    def _make_button(self, parent, text, command, width=None, pady=14, bg=None, fg=None):
         kw = {"width": width} if width else {}
         return tk.Button(parent, text=text, command=command, bd=0, relief="flat",
-                         highlightthickness=0, bg=bg or FIELD, fg=FG,
-                         activebackground=SELECT, activeforeground=FG,
+                         highlightthickness=0, bg=bg or FIELD, fg=fg or FG,
+                         activebackground=SELECT, activeforeground=fg or FG,
                          disabledforeground="#6D7178",
                          font=self._f(12, "bold"), padx=24, pady=pady,
                          cursor="hand2", **kw)
@@ -811,7 +832,7 @@ class KioskFrame(tk.Frame):
         if has_defect:
             fill = _mix(DIM_DEFECT_FILL, DEFECT_FILL, t)
             outline = _mix(DIM_DEFECT_RING, DEFECT_RING, t)
-        elif self._state == REPORT_SELECT and label in PCS:
+        elif self._state == REPORT_SELECT and label in MACHINES:
             fill = _mix(DIM_FREE, REPORT_SELECT_FILL, t)
             outline = _mix(DIM_FREE_RING, REPORT_SELECT_RING, t)
         elif occupied:
@@ -821,7 +842,7 @@ class KioskFrame(tk.Frame):
             fill = _mix(DIM_FREE, free_fill, t)
             outline = _mix(DIM_FREE_RING, free_ring, t)
         width = 2 if (occupied and not has_defect and self._state != REPORT_SELECT) else 3
-        if not occupied or has_defect or (self._state == REPORT_SELECT and label in PCS):
+        if not occupied or has_defect or (self._state == REPORT_SELECT and label in MACHINES):
             c.create_oval(*_bbox(cx, cy, r + 4), fill="", outline=outline, width=1)
         oval = c.create_oval(*_bbox(cx, cy, r), fill=fill, outline=outline, width=width)
         c.create_text(cx, cy, text=text, fill=_mix(DIM_TEXT, FG, t), font=self._f(10, "bold"))
@@ -855,7 +876,7 @@ class KioskFrame(tk.Frame):
         if self._state == AWAITING:
             return True
         if self._state == REPORT_SELECT:
-            return label in PCS
+            return label in MACHINES
         # Em repouso: máquina com ocupante(s) ou com defeito → clique abre painel
         return self._state == IDLE and (bool(self._occupants.get(label)) or self._has_defect(label))
 
@@ -1163,17 +1184,27 @@ class KioskFrame(tk.Frame):
         for widget in self._panel_inner.winfo_children():
             widget.destroy()
 
+        is_ml = str(label).startswith("ML")
+        nome_display = label if is_ml else f"PC {label}"
+
         tk.Label(
-            self._panel_inner, text=f"PC {label} — Qual o problema?",
+            self._panel_inner, text=f"{nome_display} — Qual o problema?",
             bg=BG, fg=FG, font=self._f(11, "bold")
         ).pack(side="left", padx=(0, 10))
 
-        opcoes = (
-            "Mouse ou Teclado",
-            "Sem Rede",
-            "Monitor ou Nao Liga",
-            "Outro Defeito",
-        )
+        if is_ml:
+            opcoes = (
+                "Tomada ruim",
+                "Sem Rede",
+                "Outros defeitos",
+            )
+        else:
+            opcoes = (
+                "Mouse ou Teclado",
+                "Sem Rede",
+                "Monitor ou Nao Liga",
+                "Outros defeitos",
+            )
         for motivo in opcoes:
             btn = tk.Button(
                 self._panel_inner, text=motivo,
@@ -1193,7 +1224,7 @@ class KioskFrame(tk.Frame):
         btn_cancel.pack(side="left", padx=(8, 0))
 
         self._show_slot("panel")
-        self._set_feedback(f"Selecione o defeito observado em PC {label}.", "warn")
+        self._set_feedback(f"Selecione o defeito observado em {nome_display}.", "warn")
         self._start_deadline(self._reset, CONFIRM_TIMEOUT_S)
 
     def _confirm_defect_report(self, label: str, motivo: str):
@@ -1201,7 +1232,8 @@ class KioskFrame(tk.Frame):
         registrar_defeito_maquina(self.config, label, motivo)
         self._reset()
         self._draw_map()
-        self._toast(f"Defeito registrado em PC {label}: {motivo}", "success")
+        nome_display = label if str(label).startswith("ML") else f"PC {label}"
+        self._toast(f"Defeito registrado em {nome_display}: {motivo}", "success")
 
     def _open_defect_resolution_panel(self, label: str, from_awaiting: bool):
         self._stop_deadline()
@@ -1209,7 +1241,8 @@ class KioskFrame(tk.Frame):
             widget.destroy()
 
         motivo = self.config.get("maquinas_defeito", {}).get(label, "")
-        texto_defeito = f"PC {label} — Defeito: {motivo}"
+        nome_display = label if str(label).startswith("ML") else f"PC {label}"
+        texto_defeito = f"{nome_display} — Defeito: {motivo}"
 
         if not from_awaiting:
             self._set_state(PANEL)
@@ -1265,18 +1298,19 @@ class KioskFrame(tk.Frame):
         self._stop_deadline()
         resolver_defeito_maquina(self.config, label)
         self._draw_map()
+        nome_display = label if str(label).startswith("ML") else f"PC {label}"
         if from_awaiting:
             self._animate_slot(0)
-            self._toast(f"Defeito resolvido em PC {label}.", "success")
+            self._toast(f"Defeito resolvido em {nome_display}.", "success")
             self._cancel_subpanel_to_awaiting()
         else:
             if self._occupants.get(label):
-                self._toast(f"Defeito resolvido em PC {label}.", "success")
+                self._toast(f"Defeito resolvido em {nome_display}.", "success")
                 self._open_occupant_panel(label)
             else:
                 self._reset()
                 self._draw_map()
-                self._toast(f"Defeito resolvido em PC {label}.", "success")
+                self._toast(f"Defeito resolvido em {nome_display}.", "success")
 
     def _on_use_defective_machine_anyway(self, label: str):
         self._animate_slot(0)
@@ -1336,7 +1370,7 @@ class KioskFrame(tk.Frame):
         if not label:
             return
         if self._state == REPORT_SELECT:
-            if label in PCS:
+            if label in MACHINES:
                 self._open_report_problem_panel(label)
         elif self._state == AWAITING:
             self._on_machine_selected(label)
@@ -1615,6 +1649,24 @@ class KioskFrame(tk.Frame):
         self._set_feedback(IDLE_MSG, "idle")
         self._focus_entry()
 
+    def fechar_aplicacao(self):
+        try:
+            ativos = contar_ativos()
+            if ativos > 0:
+                top = self.winfo_toplevel()
+                opcao = dialog_fechar_com_ativos(top, ativos)
+                if opcao == "cancelar":
+                    return
+                elif opcao == "registrar_e_sair":
+                    hora_saida = agora().strftime("%H:%M")
+                    encerrar_ativos_fechamento(hora_saida, self.config)
+                elif opcao == "sair_sem_registrar":
+                    pass
+        except Exception:
+            pass
+        top = self.winfo_toplevel()
+        top.destroy()
+
     def destroy(self):
         for name in ("_clock_job", "_deadline_job", "_flash_job", "_refresh_job",
                      "_toast_job", "_map_job", "_slot_job", "_focus_job", "_undo_job",
@@ -1640,6 +1692,10 @@ class KioskFrame(tk.Frame):
             self._top_binds.clear()
             if getattr(top, "_from_dialog", None) == self._return_focus_to_matricula:
                 delattr(top, "_from_dialog")
+            try:
+                top.protocol("WM_DELETE_WINDOW", top.destroy)
+            except (tk.TclError, AttributeError):
+                pass
         except (tk.TclError, AttributeError):
             pass
         super().destroy()
