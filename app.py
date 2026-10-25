@@ -1,7 +1,13 @@
 import argparse
 import tkinter as tk
 from core.database import init_db
-from core.services import load_config, save_config, run_boot_operations, finalizar_export_silencioso
+from core.services import (
+    load_config,
+    save_config,
+    run_boot_operations,
+    finalizar_export_silencioso,
+    iniciar_verificacao_ota_async,
+)
 
 class AppController:
     def __init__(self, root, initial_mode):
@@ -10,6 +16,9 @@ class AppController:
         self.current_app = None
         self.boot_results = None
         self.boot_completed = False
+        self.bolsista_prompted = False
+        self.ota_check_started = False
+        self.ota_info = None
         
         # Load theme colors
         self.config = load_config()
@@ -68,6 +77,9 @@ class AppController:
         
         self.current_app = KioskFrame(self.root, on_switch_mode=lambda: self.switch_mode("dashboard"), config=self.config)
         self.current_app.pack(fill="both", expand=True)
+
+        if self.ota_info:
+            self.current_app.registrar_ota_disponivel(self.ota_info, on_trigger_ota=self._trigger_ota)
         
         # In kiosk, boot operations run silently in background
         if not self.boot_completed:
@@ -78,6 +90,7 @@ class AppController:
         if self.boot_results.get("export"):
             finalizar_export_silencioso(self.boot_results["export"]["mes"], self.boot_results["export"]["dados"], self.config)
         self.boot_completed = True
+        self._schedule_post_boot_tasks()
         
     def setup_dashboard(self):
         from core.config import TEMAS
@@ -95,17 +108,63 @@ class AppController:
         self.root.unbind("<Escape>")
         
         self.current_app = App(self.root, on_switch_mode=lambda: self.switch_mode("kiosk"), config=self.config)
-        # Note: App currently packs its own children to root, so `App(self.root)` modifies root directly.
-        # But wait, App uses self.root natively. If it doesn't subclass Frame, `destroy()` might be tricky.
-        # Let's check if `App` has a `destroy` method or how to clean it up.
         
         if not self.boot_completed:
             # First boot in dashboard
-            self.root.after(500, self.current_app._boot_checks)
+            self.root.after(500, self._run_dashboard_boot)
             self.boot_completed = True
-        elif self.boot_results:
-            # We switched from kiosk to dashboard, show held results
-            self.show_held_boot_results()
+        else:
+            if self.boot_results:
+                # We switched from kiosk to dashboard, show held results
+                self.show_held_boot_results()
+            if self.ota_info and hasattr(self.current_app, "notificar_ota_disponivel"):
+                self.current_app.notificar_ota_disponivel(
+                    self.ota_info, on_trigger_ota=self._trigger_ota, abrir_popup=True
+                )
+
+    def _run_dashboard_boot(self):
+        if self.current_app and hasattr(self.current_app, "_boot_checks"):
+            self.current_app._boot_checks()
+        self._schedule_post_boot_tasks()
+
+    def _schedule_post_boot_tasks(self):
+        if not self.bolsista_prompted:
+            self.bolsista_prompted = True
+            self.root.after(600, self._prompt_bolsista_boot)
+        if not self.ota_check_started:
+            self.ota_check_started = True
+            iniciar_verificacao_ota_async(
+                self.config,
+                lambda res: self.root.after(0, lambda: self._on_ota_result(res)),
+            )
+
+    def _prompt_bolsista_boot(self):
+        from ui.dialogs import popup_selecionar_bolsista
+        popup_selecionar_bolsista(self.root, self.config)
+        if self.current_app:
+            if hasattr(self.current_app, "atualizar_pill_bolsista"):
+                self.current_app.atualizar_pill_bolsista()
+            elif hasattr(self.current_app, "atualizar_bolsista_ui"):
+                self.current_app.atualizar_bolsista_ui()
+
+    def _trigger_ota(self):
+        if not self.ota_info:
+            return
+        from ui.dialogs import executar_fluxo_ota_ui
+        executar_fluxo_ota_ui(self.root, self.ota_info)
+
+    def _on_ota_result(self, info_ota):
+        if not info_ota:
+            return
+        self.ota_info = info_ota
+        if not self.current_app:
+            return
+        if self.mode == "kiosk" and hasattr(self.current_app, "registrar_ota_disponivel"):
+            self.current_app.registrar_ota_disponivel(info_ota, on_trigger_ota=self._trigger_ota)
+        elif self.mode == "dashboard" and hasattr(self.current_app, "notificar_ota_disponivel"):
+            self.current_app.notificar_ota_disponivel(
+                info_ota, on_trigger_ota=self._trigger_ota, abrir_popup=True
+            )
             
     def show_held_boot_results(self):
         # We process self.boot_results and show toasts via Dashboard

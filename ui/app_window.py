@@ -38,7 +38,8 @@ from core.config import (
     SCHEMA_VERSION,
     EXPORT_DIR,
     TEMAS,
-    COL_NAMES
+    COL_NAMES,
+    VERSAO_ATUAL,
 )
 
 from core.database import (
@@ -94,6 +95,7 @@ from core.services import (
     verificar_e_executar_backups,
     abrir_diretorio_so,
     gerar_relatorio_csv,
+    iniciar_turno_bolsista,
 )
 from ui.dialogs import (
     mostrar_sobre, pedir_input, popup_sem_matricula,
@@ -101,13 +103,9 @@ from ui.dialogs import (
     visualizar_db, abrir_bolsistas,
     abrir_alunos, abrir_form_edicao, copiar_periodo,
     mostrar_toast, pedir_nome_com_matricula,
-    dialog_fechar_com_ativos
+    dialog_fechar_com_ativos,
+    dialog_atualizacao_disponivel,
 )
-
-# ─────────────────────────────────────────────
-# VERSION
-# ─────────────────────────────────────────────
-VERSAO_ATUAL = "1.3.2"
 
 
 
@@ -139,6 +137,9 @@ class App:
         self._bolsista_ts: dict[str, tuple[float, float]] = {}
         self._ultima_entrada_ts: float = 0.0
         self._boot_ts: float = time.monotonic()
+        self._ota_info: dict | None = None
+        self._on_trigger_ota = None
+        self._ota_menu_added: bool = False
 
         self._build_ui()
         self._build_menu()
@@ -183,6 +184,19 @@ class App:
         self._novidades_job = None
         versao_gravada = self.config.get("versao_registrada", "")
         expira_str     = self.config.get("popup_expira_em", "")
+
+        changelog_path = os.path.join(BASE_DIR, "CHANGELOG.md")
+        try:
+            with open(changelog_path, "r", encoding="utf-8") as f:
+                conteudo = f.read()
+        except Exception:
+            conteudo = ""
+
+        if not conteudo.strip():
+            if versao_gravada != VERSAO_ATUAL:
+                self.config["versao_registrada"] = VERSAO_ATUAL
+                save_config(self.config)
+            return
 
         # New version detected → reset 2-day window
         if versao_gravada != VERSAO_ATUAL:
@@ -864,11 +878,48 @@ class App:
         """Salva o bolsista selecionado ao mudar a escolha e reseta o reminder."""
         selecionado = self.combo_bolsista.get()
         if selecionado:
-            self.config["ultimo_bolsista"] = selecionado
-            save_config(self.config)
+            iniciar_turno_bolsista(selecionado, self.config)
         # Reset tracking for new bolsista
         self._bolsista_ts.pop(selecionado, None)
         self._set_bolsista_reminder(False)
+
+    def atualizar_bolsista_ui(self):
+        """Sincroniza combo_bolsista com ultimo_bolsista salvo em config."""
+        try:
+            bolsistas = buscar_bolsistas()
+            self.combo_bolsista["values"] = bolsistas
+            ultimo = self.config.get("ultimo_bolsista")
+            if ultimo and ultimo in bolsistas:
+                self.combo_bolsista.set(ultimo)
+            elif bolsistas:
+                self.combo_bolsista.set(bolsistas[0])
+            self._set_bolsista_reminder(False)
+        except tk.TclError:
+            pass
+
+    def notificar_ota_disponivel(self, info_ota: dict, on_trigger_ota=None, abrir_popup: bool = True):
+        """Adiciona opção de atualização OTA no menu (⋮) e exibe diálogo se não postergado."""
+        if not info_ota:
+            return
+        self._ota_info = info_ota
+        self._on_trigger_ota = on_trigger_ota
+        versao_nova = info_ota.get("versao_nova", "")
+        if not self._ota_menu_added:
+            try:
+                self.menu.add_separator()
+                self.menu.add_command(
+                    label=f"Atualização disponível (v{versao_nova})",
+                    command=lambda: on_trigger_ota() if on_trigger_ota else None,
+                )
+                self._ota_menu_added = True
+            except tk.TclError:
+                pass
+        if abrir_popup:
+            hoje_iso = agora().strftime("%Y-%m-%d")
+            if self.config.get("ota_postergado_em") != hoje_iso:
+                dialog_atualizacao_disponivel(
+                    self.root, info_ota, self.config, on_confirm_update=on_trigger_ota
+                )
 
     def _set_bolsista_reminder(self, visible: bool):
         """Show or hide the * reminder label next to combo_bolsista."""

@@ -26,10 +26,16 @@ from core.database import (
     buscar_registros_por_mes, buscar_ultimo_registro, finalizar_registro, inserir_aluno,
 )
 from core.services import (
-    agora, gerar_id_servidor, load_config, load_layout, normalizar_nome,
-    processar_entrada, reverter_acao, save_config, verificar_e_executar_backups,
+    agora, formatar_dois_nomes, gerar_id_servidor, iniciar_turno_bolsista,
+    load_config, load_layout, normalizar_nome, processar_entrada,
+    processar_entrada_com_despejo, registrar_defeito_maquina,
+    resolver_defeito_maquina, reverter_acao, save_config,
+    validar_entrada_nome, verificar_alerta_turno, verificar_e_executar_backups,
 )
-from ui.dialogs import popup_sem_matricula, abrir_form_edicao, mostrar_toast
+from ui.dialogs import (
+    popup_sem_matricula, abrir_form_edicao, mostrar_toast,
+    popup_selecionar_bolsista, dialog_atualizacao_disponivel,
+)
 
 # ── Map Active Palette & Constants (Kiosk Canonical) ─────────────────────
 PC_FREE       = "#1E4D8C"
@@ -41,6 +47,14 @@ ML_FREE_RING  = "#4EC97B"
 BOLS_CLR      = "#1e2b3c"
 HOVER         = "#3A5F9A"
 DESK_CLR      = "#444444"
+
+REPORT_SELECT_FILL = "#5C4B12"
+REPORT_SELECT_RING = "#F0A500"
+DEFECT_FILL        = "#5A1E1E"
+DEFECT_RING        = "#E05A47"
+DIM_DEFECT_FILL    = "#361919"
+DIM_DEFECT_RING    = "#8C3B32"
+AMBER_ALERT        = "#F0A500"
 
 MACHINE_R     = 20
 IDLE_TIMEOUT_S = 60
@@ -109,8 +123,10 @@ BADGE_R = 9           # Ø 18px
 CARD_W = 250
 CARD_NAME_MAX = 30
 
-IDLE, NAME, AWAITING, PANEL, BUSY = "idle", "name", "awaiting", "panel", "busy"
-_STEP_OF_STATE = {IDLE: 0, NAME: 1, AWAITING: 2, PANEL: -1}   # BUSY mantém o passo
+IDLE, NAME, AWAITING, PANEL, BUSY, REPORT_SELECT = (
+    "idle", "name", "awaiting", "panel", "busy", "report_select"
+)
+_STEP_OF_STATE = {IDLE: 0, NAME: 1, AWAITING: 2, PANEL: -1, REPORT_SELECT: -1}   # BUSY mantém o passo
 
 SLOT_H = 56
 ANIM_STEPS = 8
@@ -170,6 +186,9 @@ class KioskFrame(tk.Frame):
         self._orphan_warn_job = None
         self._slot_h = 0
         self._slot_job = None
+        self._turno_blink_on = False
+        self._ota_info: dict | None = None
+        self._ota_menu_added = False
         self._top_binds: list[tuple[str, str]] = []
 
         self._build_ui()
@@ -212,11 +231,14 @@ class KioskFrame(tk.Frame):
         tk.Label(head, text="BEM-VINDO(A)", bg=BG, fg=FG,
                  font=self._f(32, "bold")).grid(row=0, column=1)
 
-        self.btn_switch = tk.Button(head, text="Dashboard ⇋", command=self.on_switch_mode,
+        left_frame = tk.Frame(head, bg=BG)
+        left_frame.grid(row=0, column=0, sticky="w")
+
+        self.btn_switch = tk.Button(left_frame, text="Dashboard ⇋", command=self.on_switch_mode,
                                     bg=BG, fg=DIM_TEXT, bd=0, highlightthickness=0,
                                     activebackground=BG, activeforeground=FG, cursor="hand2", font=self._f(10))
         if self.on_switch_mode:
-            self.btn_switch.grid(row=0, column=0, sticky="w")
+            self.btn_switch.pack(side="left", padx=(0, 12))
             
             self._switch_tooltip = None
             def _show_sw_tip(e):
@@ -235,6 +257,25 @@ class KioskFrame(tk.Frame):
             self.btn_switch.bind("<Leave>", _hide_sw_tip)
             self.btn_switch.bind("<Button-1>", _hide_sw_tip)
 
+        # Pill do Bolsista (sem emojis, com indicador '|' piscante após 2h)
+        self._pill_frame = tk.Frame(
+            left_frame, bg=FIELD, highlightthickness=1,
+            highlightbackground=OUTLINE, padx=10, pady=4, cursor="hand2"
+        )
+        self._pill_frame.pack(side="left")
+        self._lbl_turno_ind = tk.Label(
+            self._pill_frame, text="|", bg=FIELD, fg=TXT_SEC,
+            font=self._f(11, "bold"), cursor="hand2"
+        )
+        self._lbl_turno_ind.pack(side="left", padx=(0, 6))
+        self._lbl_turno_nome = tk.Label(
+            self._pill_frame, text="", bg=FIELD, fg=FG,
+            font=self._f(10, "bold"), cursor="hand2"
+        )
+        self._lbl_turno_nome.pack(side="left")
+        for w in (self._pill_frame, self._lbl_turno_ind, self._lbl_turno_nome):
+            w.bind("<Button-1>", self._on_pill_click)
+        self.atualizar_pill_bolsista()
 
         right_frame = tk.Frame(head, bg=BG)
         right_frame.grid(row=0, column=2, sticky="e")
@@ -321,7 +362,7 @@ class KioskFrame(tk.Frame):
         self._name_inner = tk.Frame(self._slot_box, bg=BG)
         tk.Label(self._name_inner, text="Insira seu nome:", bg=BG, fg=FG,
                  font=self._f(12, "bold")).pack(side="left")
-        nvcmd = (self.register(lambda p: len(p) <= 60), "%P")
+        nvcmd = (self.register(validar_entrada_nome), "%P")
         self._name_entry = tk.Entry(self._name_inner, width=28, bd=0, highlightthickness=0,
                                     bg=FIELD, fg=FG, insertbackground=FG,
                                     font=self._f(16), validate="key",
@@ -350,6 +391,9 @@ class KioskFrame(tk.Frame):
         self._btn_semmat = self._make_button(btn_frame, "Sem matrícula", self._on_sem_matricula,
                                              width=16)
         self._btn_semmat.pack(side="left", padx=(0, 10))
+        self._btn_defeito = self._make_button(btn_frame, "Reportar defeito", self._on_reportar_defeito,
+                                              width=16)
+        self._btn_defeito.pack(side="left", padx=(0, 10))
         self._btn_sem = self._make_button(btn_frame, "Escolher depois", self._sem_maquina, width=18)
         self._btn_sem.pack(side="left", padx=(0, 10))
         self._btn_clear = self._make_button(btn_frame, "Cancelar", self._reset, width=14,
@@ -385,8 +429,9 @@ class KioskFrame(tk.Frame):
         """Habilita cada botão conforme o estado (fonte única da verdade)."""
         s = self._state
         self._btn_semmat.config(state="normal" if s == IDLE else "disabled")
+        self._btn_defeito.config(state="normal" if s == IDLE else "disabled")
         self._btn_sem.config(state="normal" if s == AWAITING else "disabled")
-        self._btn_clear.config(state="normal" if s in (NAME, AWAITING) else "disabled")
+        self._btn_clear.config(state="normal" if s in (NAME, AWAITING, REPORT_SELECT) else "disabled")
         self._btn_undo.config(state="normal" if (s == IDLE and self._undo_action) else "disabled")
         
         if s == AWAITING:
@@ -404,11 +449,55 @@ class KioskFrame(tk.Frame):
             else:
                 lbl.config(text=f"{i + 1}  {STEP_NAMES[i]}", bg=BG, fg=DIM_TEXT)
 
+    # ── Pill do Bolsista & OTA ────────────────────────────────────────────
+
+    def atualizar_pill_bolsista(self):
+        bol = self.config.get("ultimo_bolsista")
+        dois_nomes = formatar_dois_nomes(bol) if bol else "Selecionar"
+        self._lbl_turno_nome.config(text=f"Bolsista: {dois_nomes}")
+        if not verificar_alerta_turno(self.config, duracao_horas=2):
+            self._turno_blink_on = False
+            self._lbl_turno_ind.config(fg=TXT_SEC)
+            self._pill_frame.config(highlightbackground=OUTLINE)
+
+    def _on_pill_click(self, event=None):
+        escolhido = popup_selecionar_bolsista(self.winfo_toplevel(), self.config)
+        if escolhido:
+            self._turno_blink_on = False
+            self.atualizar_pill_bolsista()
+        return "break"
+
+    def registrar_ota_disponivel(self, info_ota: dict, on_trigger_ota=None):
+        self._ota_info = info_ota
+        if not self._ota_menu_added and info_ota and info_ota.get("disponivel"):
+            self._ota_menu_added = True
+            v_nova = info_ota.get("versao_nova", "")
+            self.menu_options.add_separator()
+            self.menu_options.add_command(
+                label=f"Atualizar LabCTRL (v{v_nova})",
+                command=lambda: dialog_atualizacao_disponivel(
+                    self.winfo_toplevel(), info_ota, self.config, on_confirm_update=on_trigger_ota
+                ),
+            )
+
     # ── Clock ─────────────────────────────────────────────────────────────
 
     def _tick_clock(self):
         n = agora()
         self._lbl_clock.config(text=f"{n.strftime('%H:%M')} • {DIAS[n.weekday()]}")
+
+        if verificar_alerta_turno(self.config, duracao_horas=2):
+            self._turno_blink_on = not self._turno_blink_on
+            if self._turno_blink_on:
+                self._lbl_turno_ind.config(fg=AMBER_ALERT)
+                self._pill_frame.config(highlightbackground=AMBER_ALERT)
+            else:
+                self._lbl_turno_ind.config(fg=FIELD)
+                self._pill_frame.config(highlightbackground=OUTLINE)
+        else:
+            self._turno_blink_on = False
+            self._lbl_turno_ind.config(fg=TXT_SEC)
+            self._pill_frame.config(highlightbackground=OUTLINE)
 
         if not self._clock_initial_tick:
             novos_backups = verificar_e_executar_backups(self.config)
@@ -485,7 +574,8 @@ class KioskFrame(tk.Frame):
         self._state = state
         if state in _STEP_OF_STATE:
             self._step = _STEP_OF_STATE[state]
-        self._animate_map(1.0 if state == AWAITING else 0.0)
+        self._animate_map(1.0 if state in (AWAITING, REPORT_SELECT) else 0.0)
+        self._draw_map()
         self._apply_buttons()
         self._render_steps()
 
@@ -499,7 +589,7 @@ class KioskFrame(tk.Frame):
         return True
 
     def _on_entry_click(self, event=None):
-        if self._state == PANEL:
+        if self._state in (PANEL, REPORT_SELECT):
             self._reset()
         elif self._state == NAME:
             self._animate_slot(0)
@@ -695,7 +785,7 @@ class KioskFrame(tk.Frame):
                 self._draw_badge(label, pos[0], pos[1], len(people))
 
     def _draw_legend(self):
-        """Legenda (Livre / Ocupado / badge), dica de atalhos e estado vazio."""
+        """Legenda (Livre / Ocupado / Com defeito)."""
         c = self.canvas
         t = self._map_t
         txt = _mix(DIM_TEXT, TXT_SEC, t)
@@ -707,21 +797,31 @@ class KioskFrame(tk.Frame):
         c.create_oval(*_bbox(x2 + 8, y, 8), fill=_mix(DIM_OCC, PC_OCCUPIED, t),
                       outline=_mix(DIM_OCC_RING, HOVER, t), width=2)
         c.create_text(x2 + 24, y, text="Ocupado", anchor="w", fill=txt, font=self._f(11))
-        x3 = x2 + 130
-        # Legend for (n) people and empty lab removed per user request
+        x3 = x2 + 120
+        c.create_oval(*_bbox(x3 + 8, y, 8), fill=_mix(DIM_DEFECT_FILL, DEFECT_FILL, t),
+                      outline=_mix(DIM_DEFECT_RING, DEFECT_RING, t), width=2)
+        c.create_text(x3 + 24, y, text="Com defeito", anchor="w", fill=txt, font=self._f(11))
 
     def _draw_machine(self, label, text, cx, cy, r, free_fill, occ_fill, free_ring):
         c = self.canvas
         t = self._map_t
+        defeitos = self.config.get("maquinas_defeito", {})
+        has_defect = isinstance(defeitos, dict) and (label in defeitos)
         occupied = label in self._occupants
-        if occupied:
+        if has_defect:
+            fill = _mix(DIM_DEFECT_FILL, DEFECT_FILL, t)
+            outline = _mix(DIM_DEFECT_RING, DEFECT_RING, t)
+        elif self._state == REPORT_SELECT and label in PCS:
+            fill = _mix(DIM_FREE, REPORT_SELECT_FILL, t)
+            outline = _mix(DIM_FREE_RING, REPORT_SELECT_RING, t)
+        elif occupied:
             fill = _mix(DIM_OCC, occ_fill, t)
             outline = _mix(DIM_OCC_RING, HOVER, t)
         else:
             fill = _mix(DIM_FREE, free_fill, t)
             outline = _mix(DIM_FREE_RING, free_ring, t)
-        width = 2 if occupied else 3
-        if not occupied:
+        width = 2 if (occupied and not has_defect and self._state != REPORT_SELECT) else 3
+        if not occupied or has_defect or (self._state == REPORT_SELECT and label in PCS):
             c.create_oval(*_bbox(cx, cy, r + 4), fill="", outline=outline, width=1)
         oval = c.create_oval(*_bbox(cx, cy, r), fill=fill, outline=outline, width=width)
         c.create_text(cx, cy, text=text, fill=_mix(DIM_TEXT, FG, t), font=self._f(10, "bold"))
@@ -747,11 +847,17 @@ class KioskFrame(tk.Frame):
                 best, best_d = label, d
         return best
 
+    def _has_defect(self, label: str) -> bool:
+        defeitos = self.config.get("maquinas_defeito", {})
+        return isinstance(defeitos, dict) and (label in defeitos)
+
     def _is_interactive(self, label) -> bool:
         if self._state == AWAITING:
             return True
-        # Em repouso: máquina com ocupante(s) → clique abre confirmação de saída ou painel
-        return self._state == IDLE and bool(self._occupants.get(label))
+        if self._state == REPORT_SELECT:
+            return label in PCS
+        # Em repouso: máquina com ocupante(s) ou com defeito → clique abre painel
+        return self._state == IDLE and (bool(self._occupants.get(label)) or self._has_defect(label))
 
     def _on_motion(self, event):
         label = self._machine_at(event.x, event.y)
@@ -768,7 +874,7 @@ class KioskFrame(tk.Frame):
             self.canvas.config(cursor="hand2")
         else:
             self.canvas.config(cursor="")
-        if self._occupants.get(label):
+        if self._occupants.get(label) or self._has_defect(label):
             self._show_card(label)
         else:
             self.canvas.delete("card")
@@ -786,12 +892,14 @@ class KioskFrame(tk.Frame):
     def _show_card(self, label):
         c = self.canvas
         c.delete("card")
-        people = self._occupants[label]
+        people = self._occupants.get(label, [])
+        defeitos = self.config.get("maquinas_defeito", {})
+        motivo_defeito = defeitos.get(label) if isinstance(defeitos, dict) else None
         shown = people[:2]
         extra = len(people) - len(shown)
         n = len(people)
         title_txt = f"{'Mesa Livre' if label.startswith('ML') else 'PC ' + label} — {n} Ocupante{'s' if n != 1 else ''}"
-        h = 40 + 52 * len(shown) + (22 if extra > 0 else 0)
+        h = 40 + (26 if motivo_defeito else 0) + 52 * len(shown) + (22 if extra > 0 else 0)
 
         cx, cy = MACHINES[label]
         x0 = cx + 15
@@ -805,6 +913,10 @@ class KioskFrame(tk.Frame):
                       font=self._f(11, "bold"), tags="card")
         c.create_line(x0 + 1, y0 + 30, x1 - 1, y0 + 30, fill=SELECT, tags="card")
         y = y0 + 48
+        if motivo_defeito:
+            c.create_text(x0 + 12, y - 4, text=f"Defeito: {motivo_defeito}", fill=DEFECT_RING,
+                          anchor="w", font=self._f(10, "bold"), tags="card")
+            y += 26
         for nome, mat, _rid in shown:
             if len(nome) > CARD_NAME_MAX:
                 nome = nome[:CARD_NAME_MAX - 1] + "…"
@@ -871,6 +983,7 @@ class KioskFrame(tk.Frame):
             return "break" if event else None
         try:
             msg = reverter_acao(self._undo_action)
+            self.config.update(load_config())
         except Exception as e:  # noqa: BLE001
             self._flash_feedback(f"Erro ao desfazer: {e}")
             return "break" if event else None
@@ -1036,21 +1149,169 @@ class KioskFrame(tk.Frame):
             return
         self._enter_awaiting()
 
-    # ── Escolha da máquina ────────────────────────────────────────────────
+    # ── Reporte e Resolução de Defeito de Máquina ─────────────────────────
+
+    def _on_reportar_defeito(self):
+        if self._state != IDLE:
+            return
+        self._set_state(REPORT_SELECT)
+        self._set_feedback("Toque na máquina que apresenta problema.", "warn")
+        self._start_deadline(self._reset)
+
+    def _open_report_problem_panel(self, label: str):
+        self._stop_deadline()
+        for widget in self._panel_inner.winfo_children():
+            widget.destroy()
+
+        tk.Label(
+            self._panel_inner, text=f"PC {label} — Qual o problema?",
+            bg=BG, fg=FG, font=self._f(11, "bold")
+        ).pack(side="left", padx=(0, 10))
+
+        opcoes = (
+            "Mouse ou Teclado",
+            "Sem Rede",
+            "Monitor ou Nao Liga",
+            "Outro Defeito",
+        )
+        for motivo in opcoes:
+            btn = tk.Button(
+                self._panel_inner, text=motivo,
+                command=lambda m=motivo: self._confirm_defect_report(label, m),
+                bd=0, relief="flat", highlightthickness=0,
+                bg=FIELD, fg=FG, activebackground=SELECT, activeforeground=FG,
+                font=self._f(10, "bold"), padx=12, pady=6, cursor="hand2"
+            )
+            btn.pack(side="left", padx=3)
+
+        btn_cancel = tk.Button(
+            self._panel_inner, text="Cancelar", command=self._reset,
+            bd=0, relief="flat", highlightthickness=0,
+            bg=CANCEL_BTN_BG, fg=FG, activebackground=SELECT, activeforeground=FG,
+            font=self._f(10, "bold"), padx=12, pady=6, cursor="hand2"
+        )
+        btn_cancel.pack(side="left", padx=(8, 0))
+
+        self._show_slot("panel")
+        self._set_feedback(f"Selecione o defeito observado em PC {label}.", "warn")
+        self._start_deadline(self._reset, CONFIRM_TIMEOUT_S)
+
+    def _confirm_defect_report(self, label: str, motivo: str):
+        self._stop_deadline()
+        registrar_defeito_maquina(self.config, label, motivo)
+        self._reset()
+        self._draw_map()
+        self._toast(f"Defeito registrado em PC {label}: {motivo}", "success")
+
+    def _open_defect_resolution_panel(self, label: str, from_awaiting: bool):
+        self._stop_deadline()
+        for widget in self._panel_inner.winfo_children():
+            widget.destroy()
+
+        motivo = self.config.get("maquinas_defeito", {}).get(label, "")
+        texto_defeito = f"PC {label} — Defeito: {motivo}"
+
+        if not from_awaiting:
+            self._set_state(PANEL)
+            self._entry.config(state="readonly")
+
+        tk.Label(
+            self._panel_inner, text=texto_defeito,
+            bg=BG, fg=FG, font=self._f(11, "bold")
+        ).pack(side="left", padx=(0, 12))
+
+        btn_res = tk.Button(
+            self._panel_inner, text="Marcar como resolvido",
+            command=lambda: self._on_resolve_defect(label, from_awaiting),
+            bd=0, relief="flat", highlightthickness=0,
+            bg=ATIVO_BG, fg=FG, activebackground=SELECT, activeforeground=FG,
+            font=self._f(10, "bold"), padx=14, pady=6, cursor="hand2"
+        )
+        btn_res.pack(side="left", padx=4)
+
+        if from_awaiting:
+            btn_use = tk.Button(
+                self._panel_inner, text="Usar mesmo assim",
+                command=lambda: self._on_use_defective_machine_anyway(label),
+                bd=0, relief="flat", highlightthickness=0,
+                bg=FIELD, fg=FG, activebackground=SELECT, activeforeground=FG,
+                font=self._f(10, "bold"), padx=12, pady=6, cursor="hand2"
+            )
+            btn_use.pack(side="left", padx=4)
+        elif self._occupants.get(label):
+            btn_occ = tk.Button(
+                self._panel_inner, text="Ocupantes",
+                command=lambda: self._open_occupant_panel(label),
+                bd=0, relief="flat", highlightthickness=0,
+                bg=FIELD, fg=FG, activebackground=SELECT, activeforeground=FG,
+                font=self._f(10, "bold"), padx=12, pady=6, cursor="hand2"
+            )
+            btn_occ.pack(side="left", padx=4)
+
+        cancel_cmd = self._cancel_subpanel_to_awaiting if from_awaiting else self._reset
+        btn_cancel = tk.Button(
+            self._panel_inner, text="Cancelar", command=cancel_cmd,
+            bd=0, relief="flat", highlightthickness=0,
+            bg=CANCEL_BTN_BG, fg=FG, activebackground=SELECT, activeforeground=FG,
+            font=self._f(10, "bold"), padx=12, pady=6, cursor="hand2"
+        )
+        btn_cancel.pack(side="left", padx=(8, 0))
+
+        self._show_slot("panel")
+        self._set_feedback(texto_defeito, "warn")
+        self._start_deadline(cancel_cmd, CONFIRM_TIMEOUT_S)
+
+    def _on_resolve_defect(self, label: str, from_awaiting: bool):
+        self._stop_deadline()
+        resolver_defeito_maquina(self.config, label)
+        self._draw_map()
+        if from_awaiting:
+            self._animate_slot(0)
+            self._toast(f"Defeito resolvido em PC {label}.", "success")
+            self._cancel_subpanel_to_awaiting()
+        else:
+            if self._occupants.get(label):
+                self._toast(f"Defeito resolvido em PC {label}.", "success")
+                self._open_occupant_panel(label)
+            else:
+                self._reset()
+                self._draw_map()
+                self._toast(f"Defeito resolvido em PC {label}.", "success")
+
+    def _on_use_defective_machine_anyway(self, label: str):
+        self._animate_slot(0)
+        self._on_machine_selected(label, ignore_defect=True)
+
+    # ── Escolha da máquina & Despejo Suave ────────────────────────────────
+
+    def _awaiting_default_msg(self) -> str:
+        p = self._pending or {}
+        if p.get("matricula"):
+            return f"Matrícula identificada: {p.get('nome')}. Escolha o local."
+        return f"Olá, {p.get('nome')}! Escolha o local."
+
+    def _cancel_subpanel_to_awaiting(self):
+        if not self._pending:
+            self._reset()
+            return
+        self._stop_deadline()
+        self._animate_slot(0)
+        self._set_state(AWAITING)
+        self._entry.config(state="normal")
+        self._entry.focus_set()
+        self._set_feedback(self._awaiting_default_msg(), "active")
+        self._start_deadline(lambda: self._on_machine_selected(SEM_MAQUINA))
 
     def _enter_awaiting(self):
         self._set_state(AWAITING)
-        import time
         self._awaiting_ready_ts = time.monotonic() + 0.5
         self._entry.config(state="normal")
         self._entry.focus_set()                 # teclas de atalho chegam via toplevel
         p = self._pending
-        if p["matricula"]:
-            msg = f"Matrícula identificada: {p['nome']}. Escolha o local."
-        else:
-            msg = f"Olá, {p['nome']}! Escolha o local."
+        msg = self._awaiting_default_msg()
 
         cfg = load_config()
+        self.config.update(cfg)
         orfaos = cfg.get("orfaos_sem_saida", [])
         if p.get("matricula") and p["matricula"] in orfaos:
             self._set_feedback("Atenção: você não registrou saída da última vez. Lembre-se ao sair!", "warn")
@@ -1074,12 +1335,18 @@ class KioskFrame(tk.Frame):
         label = self._machine_at(event.x, event.y)
         if not label:
             return
-        if self._state == AWAITING:
+        if self._state == REPORT_SELECT:
+            if label in PCS:
+                self._open_report_problem_panel(label)
+        elif self._state == AWAITING:
             self._on_machine_selected(label)
         elif self._state == IDLE:
-            people = self._occupants.get(label, [])
-            if people:
-                self._open_occupant_panel(label)
+            if self._has_defect(label):
+                self._open_defect_resolution_panel(label, from_awaiting=False)
+            else:
+                people = self._occupants.get(label, [])
+                if people:
+                    self._open_occupant_panel(label)
 
     def _on_key(self, event):
         """Atalhos (somente AWAITING): M/L → mesa livre, 1-9 → PC, BackSpace → volta para IDLE."""
@@ -1096,7 +1363,6 @@ class KioskFrame(tk.Frame):
         elif ch.isdigit() and 1 <= int(ch) <= 9:
             self._on_machine_selected(f"{int(ch):02}")
             return "break"
-
 
     def _verificar_relogio(self) -> bool:
         JANELA = 15 * 60
@@ -1117,12 +1383,102 @@ class KioskFrame(tk.Frame):
             pass
         return True
 
-    def _on_machine_selected(self, machine: str):
+    def _open_eviction_panel(self, machine: str, ocupantes: list[tuple[str, str, int]]):
+        self._stop_deadline()
+        for widget in self._panel_inner.winfo_children():
+            widget.destroy()
+
+        nomes_ocupantes = ", ".join(n for n, _, _ in ocupantes)
+        pergunta = f"PC {machine} consta em uso por {nomes_ocupantes}. O que deseja fazer?"
+
+        tk.Label(
+            self._panel_inner,
+            text=f"PC {machine} em uso ({nomes_ocupantes}):",
+            bg=BG, fg=FG, font=self._f(11, "bold")
+        ).pack(side="left", padx=(0, 10))
+
+        btn_despejo = tk.Button(
+            self._panel_inner,
+            text="Entrar (aluno anterior já saiu)",
+            command=lambda: self._confirm_despejo_entrada(machine, ocupantes),
+            bd=0, relief="flat", highlightthickness=0,
+            bg=ATIVO_BG, fg=FG, activebackground=SELECT, activeforeground=FG,
+            font=self._f(10, "bold"), padx=14, pady=6, cursor="hand2"
+        )
+        btn_despejo.pack(side="left", padx=4)
+
+        btn_dividir = tk.Button(
+            self._panel_inner,
+            text="Dividir computador",
+            command=lambda: self._on_machine_selected(machine, ignore_defect=True, force_share=True),
+            bd=0, relief="flat", highlightthickness=0,
+            bg=FIELD, fg=FG, activebackground=SELECT, activeforeground=FG,
+            font=self._f(10, "bold"), padx=14, pady=6, cursor="hand2"
+        )
+        btn_dividir.pack(side="left", padx=4)
+
+        btn_cancel = tk.Button(
+            self._panel_inner,
+            text="Cancelar",
+            command=self._cancel_subpanel_to_awaiting,
+            bd=0, relief="flat", highlightthickness=0,
+            bg=CANCEL_BTN_BG, fg=FG, activebackground=SELECT, activeforeground=FG,
+            font=self._f(10, "bold"), padx=12, pady=6, cursor="hand2"
+        )
+        btn_cancel.pack(side="left", padx=(8, 0))
+
+        self._show_slot("panel")
+        self._set_feedback(pergunta, "warn")
+        self._start_deadline(self._cancel_subpanel_to_awaiting, CONFIRM_TIMEOUT_S)
+
+    def _confirm_despejo_entrada(self, machine: str, ocupantes: list[tuple[str, str, int]]):
+        if not self._pending:
+            self._reset()
+            return
+        self._stop_deadline()
+        if not self._verificar_relogio():
+            self._reset()
+            self._flash_feedback("Entrada cancelada: relógio do sistema suspeito.", kind="warn")
+            return
+        self._set_state(BUSY)
+        self._busy("Registrando entrada…")
+        p = self._pending
+        try:
+            if p["novo"]:
+                inserir_aluno(p["matricula"], p["nome"], p["tipo"])
+            if p.get("matricula"):
+                orfaos = self.config.get("orfaos_sem_saida", [])
+                if isinstance(orfaos, list) and p["matricula"] in orfaos:
+                    orfaos.remove(p["matricula"])
+            res = processar_entrada_com_despejo(
+                p["matricula"], p["nome"], machine, self._bolsista(), ocupantes, self.config
+            )
+            if res["status"] == "ja_ativo":
+                self._toast(f"{p['nome']} já está dentro do laboratório.", "error")
+            else:
+                self._push_undo(res)
+                self._toast(f"Entrada registrada: {p['nome']} (PC {machine}) às {res['hora']}")
+        except Exception as e:  # noqa: BLE001
+            self._reset()
+            self._flash_feedback(f"Erro ao registrar: {e}")
+            return
+        self._reset()
+        self._refresh_map()
+
+    def _on_machine_selected(self, machine: str, ignore_defect: bool = False, force_share: bool = False):
         if self._state != AWAITING or not self._pending:
             return
-        import time
         if time.monotonic() < self._awaiting_ready_ts:
             return
+
+        if machine != SEM_MAQUINA and not ignore_defect and self._has_defect(machine):
+            self._open_defect_resolution_panel(machine, from_awaiting=True)
+            return
+
+        if machine in PCS and not force_share and self._occupants.get(machine):
+            self._open_eviction_panel(machine, list(self._occupants[machine]))
+            return
+
         self._stop_deadline()
         if not self._verificar_relogio():
             self._reset()
