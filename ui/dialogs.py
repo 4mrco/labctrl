@@ -501,73 +501,95 @@ log = logging.getLogger(__name__)
 
 
 def popup_selecionar_bolsista(parent: tk.Tk | tk.Toplevel, config: dict) -> str | None:
-    """Modal para selecionar o bolsista responsável pelo turno atual (1 clique ou Enter)."""
+    """Modal compacto para selecionar o bolsista responsável pelo turno atual."""
     bolsistas = buscar_bolsistas()
     if not bolsistas:
         return None
 
     t = TEMAS["default"]
     bg, fg, field, select = t["bg"], t["fg"], t["field"], t["select"]
-    ativo_bg = t["ativo_bg"]
 
     win = tk.Toplevel(parent)
     win.title("Selecionar Bolsista do Turno")
     win.configure(bg=bg)
-    setup_dialog(win, parent, min_width=360, min_height=200,
+    setup_dialog(win, parent, min_width=360, min_height=160,
                  resizable=(False, False), escape_close=True)
 
-    tk.Label(win, text="Selecione o bolsista presente no turno:",
-             bg=bg, fg=fg, font=("Segoe UI", 11, "bold")).pack(padx=20, pady=(16, 10))
+    win.option_add("*TCombobox*Listbox.Background", field)
+    win.option_add("*TCombobox*Listbox.Foreground", fg)
+    win.option_add("*TCombobox*Listbox.SelectBackground", select)
+    win.option_add("*TCombobox*Listbox.SelectForeground", fg)
 
-    list_frame = tk.Frame(win, bg=bg)
-    list_frame.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+    style = ttk.Style(win)
+    try:
+        style.theme_use("clam")
+    except tk.TclError:
+        pass
+    style.configure(
+        "Bolsista.TCombobox",
+        fieldbackground=field,
+        background=field,
+        foreground=fg,
+        bordercolor=bg,
+        lightcolor=bg,
+        darkcolor=bg,
+        arrowcolor=fg,
+        borderwidth=0,
+        relief="flat",
+        highlightthickness=0,
+    )
+    style.map(
+        "Bolsista.TCombobox",
+        fieldbackground=[("readonly", field), ("disabled", bg)],
+        background=[("readonly", field), ("active", field)],
+        foreground=[("readonly", fg)],
+        bordercolor=[("focus", select)],
+        lightcolor=[("focus", select)],
+        darkcolor=[("focus", select)],
+        arrowcolor=[("active", fg)],
+    )
+
+    tk.Label(win, text="Selecione o bolsista presente no turno:",
+             bg=bg, fg=fg, font=("Segoe UI", 11, "bold")).pack(padx=20, pady=(16, 8))
 
     ultimo = config.get("ultimo_bolsista")
     default_bol = ultimo if ultimo in bolsistas else bolsistas[0]
     resultado = {"nome": None}
 
-    def escolher(nome_escolhido: str):
-        iniciar_turno_bolsista(nome_escolhido, config)
-        resultado["nome"] = nome_escolhido
-        win.destroy()
+    combo_bol = ttk.Combobox(
+        win, values=bolsistas, state="readonly",
+        style="Bolsista.TCombobox", font=("Segoe UI", 10), width=30
+    )
+    combo_bol.set(default_bol)
+    combo_bol.pack(padx=20, pady=(0, 16))
+    combo_bol.focus_set()
 
-    for b in bolsistas:
-        is_current = (b == default_bol)
-        btn = tk.Button(
-            list_frame,
-            text=b,
-            command=lambda n=b: escolher(n),
-            bd=0,
-            highlightthickness=1 if is_current else 0,
-            highlightbackground="#5B9BD5" if is_current else field,
-            bg=ativo_bg if is_current else field,
-            fg=fg,
-            activebackground=select,
-            activeforeground=fg,
-            font=("Segoe UI", 10, "bold" if is_current else "normal"),
-            padx=14,
-            pady=7,
-            cursor="hand2",
-            anchor="w",
-        )
-        btn.pack(fill="x", pady=3)
+    def confirmar(event=None):
+        escolhido = combo_bol.get().strip()
+        if escolhido and escolhido in bolsistas:
+            iniciar_turno_bolsista(escolhido, config)
+            resultado["nome"] = escolhido
+            win.destroy()
 
     bottom = tk.Frame(win, bg=bg)
-    bottom.pack(fill="x", padx=20, pady=(4, 16))
+    bottom.pack(fill="x", padx=20, pady=(0, 16))
+
     btn_confirm = tk.Button(
         bottom,
-        text=f"Confirmar ({default_bol})",
-        command=lambda: escolher(default_bol),
+        text="Confirmar",
+        command=confirmar,
         bd=0,
         highlightthickness=0,
-        bg="#35383e",
-        fg=fg,
-        padx=14,
+        bg="#1E4D8C",
+        fg="#FFFFFF",
+        activebackground="#2A62AB",
+        activeforeground="#FFFFFF",
+        padx=16,
         pady=6,
         font=("Segoe UI", 9, "bold"),
         cursor="hand2",
     )
-    btn_confirm.pack(side="left", expand=True, fill="x", padx=(0, 4))
+    btn_confirm.pack(side="left", expand=True, fill="x", padx=(0, 6))
 
     btn_cancel = tk.Button(
         bottom,
@@ -577,15 +599,17 @@ def popup_selecionar_bolsista(parent: tk.Tk | tk.Toplevel, config: dict) -> str 
         highlightthickness=0,
         bg="#2a2d32",
         fg="#aaa",
-        padx=12,
+        padx=14,
         pady=6,
         font=("Segoe UI", 9),
         cursor="hand2",
     )
-    btn_cancel.pack(side="right", padx=(4, 0))
+    btn_cancel.pack(side="right", padx=(6, 0))
 
-    win.bind("<Return>", lambda _: escolher(default_bol))
-    win.bind("<KP_Enter>", lambda _: escolher(default_bol))
+    win.bind("<Return>", confirmar)
+    win.bind("<KP_Enter>", confirmar)
+    combo_bol.bind("<Return>", confirmar)
+    combo_bol.bind("<KP_Enter>", confirmar)
     win.wait_window()
     return resultado["nome"]
 

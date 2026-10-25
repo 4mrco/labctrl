@@ -96,6 +96,7 @@ from core.services import (
     abrir_diretorio_so,
     gerar_relatorio_csv,
     iniciar_turno_bolsista,
+    encerrar_ativos_fechamento,
 )
 from ui.dialogs import (
     mostrar_sobre, pedir_input, popup_sem_matricula,
@@ -263,7 +264,12 @@ class App:
         self.lbl_title = tk.Label(self.header, text="LabCTRL", font=("Segoe UI", 12, "bold"))
         self.lbl_title.pack(side="left", padx=(12, 4))
 
-        self.btn_switch = tk.Button(self.header, text="⇋ Kiosk", command=self.on_switch_mode, cursor="hand2", font=("Segoe UI", 9, "bold"), bd=0, highlightthickness=0)
+        self.btn_switch = tk.Button(
+            self.header, text="⇋ Kiosk", command=self.on_switch_mode,
+            cursor="hand2", font=("Segoe UI", 9, "bold"), bd=0, highlightthickness=0,
+            bg="#1E4D8C", fg="#FFFFFF", activebackground="#2A62AB", activeforeground="#FFFFFF",
+            padx=8, pady=2
+        )
         if self.on_switch_mode:
             self.btn_switch.pack(side="left", padx=4)
 
@@ -1446,6 +1452,14 @@ class App:
         # Separator uses `field`, not `bg`
         self.sep_header.configure(bg=field)
 
+        # Mode switch button (blue highlight)
+        if getattr(self, "btn_switch", None):
+            self.btn_switch.configure(
+                bg="#1E4D8C", fg="#FFFFFF",
+                activebackground="#2A62AB", activeforeground="#FFFFFF",
+                relief="flat", bd=0, highlightthickness=0,
+            )
+
         # Filter buttons: active button gets select bg + sunken relief
         for nome, btn in self._btns_filtro.items():
             ativo = nome == self.var_filtro.get()
@@ -1510,21 +1524,7 @@ class App:
                     return
                 elif opcao == "registrar_e_sair":
                     hora_saida = agora().strftime("%H:%M")
-                    regs = buscar_registros_ativos_detalhes()
-                    cfg = load_config()
-                    orfaos_sem_saida = cfg.setdefault("orfaos_sem_saida", [])
-                    config_modificada = False
-                    for r in regs:
-                        rid = r[0]
-                        matricula = r[2] if len(r) > 2 else ""
-                        finalizar_registro(rid, hora_saida)
-                        if matricula and matricula not in orfaos_sem_saida:
-                            orfaos_sem_saida.append(matricula)
-                            config_modificada = True
-                    if config_modificada:
-                        cfg["orfaos_sem_saida"] = orfaos_sem_saida
-                        save_config(cfg)
-                        self.config.update(cfg)
+                    encerrar_ativos_fechamento(hora_saida, self.config)
                 elif opcao == "sair_sem_registrar":
                     pass
         except Exception as e:

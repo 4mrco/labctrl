@@ -33,7 +33,7 @@ DEFAULT_CONFIG = {
     "exported_months": [],
     "ultimo_bolsista": None,
     "turno_inicio_iso": "",
-    "modo_ui": "dashboard",
+    "modo_ui": "kiosk",
     "kiosk_fullscreen": False,
     "kiosk_enter_confirm": True,
     "layout": "lab_informatica",
@@ -673,6 +673,31 @@ def run_boot_operations(config: dict) -> dict:
             pass
             
     return results
+
+
+def encerrar_ativos_fechamento(hora_saida: str, config: dict) -> list[str]:
+    """Finaliza todos os registros ativos com hora_saida e adiciona suas
+    matrículas em config['orfaos_sem_saida'] para lembrete no próximo acesso.
+    Retorna a lista de matrículas adicionadas.
+    """
+    db = _get_db()
+    regs = db.buscar_registros_ativos_detalhes()
+    orfaos_sem_saida = config.setdefault("orfaos_sem_saida", [])
+    if not isinstance(orfaos_sem_saida, list):
+        orfaos_sem_saida = []
+        config["orfaos_sem_saida"] = orfaos_sem_saida
+    adicionados: list[str] = []
+    for r in regs:
+        rid = r[0]
+        matricula = r[2] if len(r) > 2 else ""
+        db.finalizar_registro(rid, hora_saida)
+        if matricula and matricula not in orfaos_sem_saida:
+            orfaos_sem_saida.append(matricula)
+            adicionados.append(matricula)
+    if regs:
+        save_config(config)
+    return adicionados
+
 
 def normalizar_matricula_export(m: str | None) -> str:
     """Normaliza matrícula para exportação de forma consistente e idempotente.
