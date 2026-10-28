@@ -6,7 +6,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_FILE    = os.path.join(BASE_DIR, "config.json")
 DB_FILE        = os.path.join(BASE_DIR, "lab.db")
 SCHEMA_VERSION = 3
-VERSAO_ATUAL   = "1.4.0"
+VERSAO_ATUAL   = "1.5.0"
 EXPORT_DIR     = os.path.join(BASE_DIR, "exports")
 
 
@@ -16,3 +16,10 @@ TEMAS = {
 }
 
 COL_NAMES = ("Nome", "Matrícula", "Entrada", "Saída", "Tempo", "Máquina")
+
+NOMES_MESES = {
+    "01": "Janeiro", "02": "Fevereiro", "03": "Março", "04": "Abril",
+    "05": "Maio", "06": "Junho", "07": "Julho", "08": "Agosto",
+    "09": "Setembro", "10": "Outubro", "11": "Novembro", "12": "Dezembro",
+}
+NOMES_MESES_REV = {v: k for k, v in NOMES_MESES.items()}

@@ -32,7 +32,7 @@ O LabCTRL adota uma arquitetura modular que isola dados, lógica e interface —
 * **Dashboard em tempo real:** visão da ocupação do ambiente, com filtros por data e status de atividade.
 * **Autoformatação inteligente:** correção autônoma de inputs (`1430` para `14:30`), padronização de nomes e validação de estações de trabalho.
 * **Sistema de desfazer (Undo):** reversão segura de entradas, saídas, edições e remoções durante a sessão.
-* **Relatórios e exportação:** geração de CSV e cópia direta formatada para planilhas, organizados por dia, semana ou mês.
+* **Relatórios e nuvem (Google Sheets):** geração de relatórios locais em CSV (paginados em blocos de 10) e sincronização assíncrona automática/manual com o Google Sheets via Apps Script Webhook.
 
 ## Instalação e Implantação
 
@@ -56,23 +56,26 @@ python3 app.py
 ```text
 labctrl/
 ├── app.py                 # Entrypoint, orquestrador de modos (Kiosk/Dashboard) e boot silencioso
+├── scripts/               # Scripts auxiliares e automações
+│   └── sheets_webhook.gs  # Webhook receptor para Google Sheets (Apps Script)
 ├── core/                  # Lógica de Negócios e Persistência
 │   ├── config.py          # Configurações globais, variáveis de ambiente e tema
 │   ├── database.py        # Transações SQLite, conexões seguras e auto-recuperação
-│   └── services.py        # I/O atômico, backups automáticos, motor de exportação e gestão de layouts
+│   ├── services.py        # I/O atômico, backups automáticos, motor de exportação e gestão de layouts
+│   └── sheets.py          # Cliente HTTP assíncrono para Google Sheets (zero dependências externas)
 ├── layouts/               # Plantas Físicas e Topologia
 │   └── *.json             # Definição estruturada do mapa (hitboxes, mesas e slots) desacoplada da UI
 ├── ui/                    # Interface Gráfica (Tkinter)
 │   ├── app_window.py      # Dashboard do bolsista, event loop e registro manual
 │   ├── dialogs.py         # Popups modais, formulários de edição e alertas
 │   └── kiosk.py           # Totem de autoatendimento, mapa interativo canônico e timeout de sessão
-└── hardware/              # Coming soon (integração com leitor RFID)
+└── hardware/              # Em breve (integração serial com leitor RFID)
 ```
 
 ## Roadmap
 
-* [x] **Atual:** Arquitetura modular, refatoração de interface e gestão de usuários.
-* [ ] **Fase 2 (Cloud):** Integração com a API do Google Sheets para espelhamento e backup automatizado na nuvem.
+* [x] **Fase 1 (Core & UX):** Arquitetura modular, refatoração de interface (Dashboard + Totem Kiosk), gestão de turnos e atualização OTA.
+* [x] **Fase 2 (Cloud / Google Sheets):** Sincronização e espelhamento em nuvem via Google Apps Script Webhook (zero dependências externas), escrita atômica e auto-sync de fechamento de mês.
 * [ ] **Fase 3 (Hardware):** Integração serial com ESP32 para leitura de tags RFID/NFC, transformando o registro por teclado em autenticação física instantânea.
 
 

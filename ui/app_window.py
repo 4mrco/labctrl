@@ -40,6 +40,8 @@ from core.config import (
     TEMAS,
     COL_NAMES,
     VERSAO_ATUAL,
+    NOMES_MESES,
+    NOMES_MESES_REV,
 )
 
 from core.database import (
@@ -97,6 +99,11 @@ from core.services import (
     gerar_relatorio_csv,
     iniciar_turno_bolsista,
     encerrar_ativos_fechamento,
+    sheets_configurado,
+    formatar_mes_aba_sheets,
+    registrar_sucesso_sync_sheets,
+    disparar_sync_sheets_async,
+    verificar_pendencia_sheets_mes_anterior,
 )
 from ui.dialogs import (
     mostrar_sobre, pedir_input, popup_sem_matricula,
@@ -106,6 +113,8 @@ from ui.dialogs import (
     mostrar_toast, pedir_nome_com_matricula,
     dialog_fechar_com_ativos,
     dialog_atualizacao_disponivel,
+    abrir_configuracao_sheets,
+    popup_confirmar_token_sheets,
 )
 
 
@@ -130,6 +139,8 @@ class App:
         self._relogio_job = None
         self._from_dialog_job = None
         self._novidades_job = None
+        self._sheets_poll_job = None
+        self._sheets_queue = None
         self._focus_out_bind = None
         self._global_binds: list[tuple[str, str]] = []
         # pilha de undo: lista de dicts {tipo, ...dados para reverter}
@@ -229,7 +240,7 @@ class App:
         setup_dialog(win, self.root, min_width=520, min_height=400,
                      resizable=(False, False), escape_close=True)
 
-        tk.Label(win, text=f"✨  O que há de novo — v{VERSAO_ATUAL}",
+        tk.Label(win, text=f"O que há de novo — v{VERSAO_ATUAL}",
                  bg=bg, fg=fg, font=("Segoe UI", 12, "bold")).pack(pady=(14, 4), padx=20)
 
         # Read CHANGELOG.md
@@ -606,19 +617,13 @@ class App:
 
     def _meses_formatados(self) -> list[str]:
         """Return months in format 'Junho 2026' for combobox."""
-        meses_num = {"01": "Janeiro", "02": "Fevereiro", "03": "Março", "04": "Abril",
-                     "05": "Maio", "06": "Junho", "07": "Julho", "08": "Agosto",
-                     "09": "Setembro", "10": "Outubro", "11": "Novembro", "12": "Dezembro"}
         raw_meses = buscar_meses()
-        return [f"{meses_num.get(m[:2], m[:2])} {m[3:]}" for m in raw_meses]
+        return [f"{NOMES_MESES.get(m[:2], m[:2])} {m[3:]}" for m in raw_meses]
 
     def _parse_mes_combo(self, texto: str) -> str:
         """Convert 'Junho 2026' back to '06/2026' format."""
-        meses_num = {"Janeiro": "01", "Fevereiro": "02", "Março": "03", "Abril": "04",
-                     "Maio": "05", "Junho": "06", "Julho": "07", "Agosto": "08",
-                     "Setembro": "09", "Outubro": "10", "Novembro": "11", "Dezembro": "12"}
         partes = texto.split()
-        return f"{meses_num.get(partes[0], partes[0])}/{partes[1]}"
+        return f"{NOMES_MESES_REV.get(partes[0], partes[0])}/{partes[1]}"
 
     # ── Abas (simplified) ───────────────────
 
@@ -1012,7 +1017,7 @@ class App:
         win = tk.Toplevel(self.root)
         win.title("Configurações")
         win.configure(bg=bg)
-        setup_dialog(win, self.root, min_width=450, min_height=250,
+        setup_dialog(win, self.root, min_width=450, min_height=350,
                      resizable=(False, False), escape_close=True)
 
         def forcar_backup():
@@ -1059,6 +1064,29 @@ class App:
         lbl_backup = tk.Label(r4, text=f"Último backup: {ultimo_bkp}", bg=bg, fg="#aaa", font=("Arial", 10), anchor="w")
         lbl_backup.pack(side="left")
         tk.Button(r4, text="GERAR AGORA", command=forcar_backup, bd=0, bg=field, fg=fg, padx=15, pady=4).pack(side="right")
+
+        # Row 5: Google Sheets
+        r5 = tk.Frame(grid_frame, bg=bg)
+        r5.pack(fill="x", pady=5)
+        tk.Label(r5, text="Google Sheets:", bg=bg, fg=fg, font=("Arial", 10), anchor="w").pack(side="left")
+        lbl_sheets_status = tk.Label(r5, text="", bg=bg, font=("Arial", 10, "bold"), anchor="w")
+        lbl_sheets_status.pack(side="left", padx=(6, 0))
+
+        def _atualizar_status_sheets():
+            if not lbl_sheets_status.winfo_exists():
+                return
+            if sheets_configurado(self.config):
+                lbl_sheets_status.config(text="Ativo", fg="#5B9BD5")
+            else:
+                lbl_sheets_status.config(text="Não configurado", fg="#888888")
+
+        _atualizar_status_sheets()
+        tk.Button(
+            r5, text="CONFIGURAR",
+            command=lambda: abrir_configuracao_sheets(win, self.config, on_save_callback=_atualizar_status_sheets),
+            bd=0, bg=field, fg=fg, activebackground=select, activeforeground=fg,
+            padx=15, pady=4, cursor="hand2",
+        ).pack(side="right")
         
         def salvar():
             self.config.pop("escolher_maquina_entrada", None)
@@ -1325,6 +1353,8 @@ class App:
             novos_backups = verificar_e_executar_backups(self.config)
             for slot_key in novos_backups:
                 mostrar_toast(self.root, f"Backup das {slot_key}h realizado!")
+            if novos_backups:
+                self._verificar_contingencia_sheets()
         self._relogio_initial_tick = False
 
         self._relogio_job = self.root.after(1000, self._tick_relogio)
@@ -1534,6 +1564,8 @@ class App:
             self.root.after_cancel(self._status_job)
         if getattr(self, "_relogio_job", None):
             self.root.after_cancel(self._relogio_job)
+        if getattr(self, "_sheets_poll_job", None):
+            self.root.after_cancel(self._sheets_poll_job)
 
         self.root.destroy()
 
@@ -1549,6 +1581,10 @@ class App:
                 mostrar_toast(self.root, f"Exportação automática: {nome_arq}")
             else:
                 mostrar_toast(self.root, "Erro na exportação automática.")
+
+        if res.get("sheets_pending"):
+            pend = res["sheets_pending"]
+            self._iniciar_sync_sheets(pend["mes"], pend["dados"], marcar_mes=True, manual=False)
             
         if res.get("orfaos"):
             for r in res["orfaos"]:
@@ -1565,6 +1601,77 @@ class App:
             mostrar_toast(self.root, "Atenção: Relógio do sistema parece atrasado!")
             
         self._novidades_job = self.root.after(400, self._verificar_novidades)
+
+
+    # ── Google Sheets Sync ───────────────────
+
+    def _iniciar_sync_sheets(
+        self,
+        mes: str,
+        dados: list[tuple],
+        marcar_mes: bool = True,
+        manual: bool = False,
+    ):
+        """Dispara sincronização assíncrona com o Google Sheets e monitora via after(200)."""
+        if self._sheets_poll_job is not None:
+            try:
+                self.root.after_cancel(self._sheets_poll_job)
+            except Exception:
+                pass
+            self._sheets_poll_job = None
+
+        self.status("Sincronizando com Google Sheets...")
+        try:
+            self._sheets_queue = disparar_sync_sheets_async(
+                mes, dados, self.config, marcar_mes=marcar_mes
+            )
+        except Exception as e:
+            log.error("Erro ao iniciar sincronização Google Sheets (%s): %s", mes, e)
+            self.status("Erro ao sincronizar com Google Sheets.", erro=True)
+            mostrar_toast(self.root, "Falha ao sincronizar Google Sheets.")
+            return
+
+        self._sheets_poll_job = self.root.after(200, self._poll_sheets_sync)
+
+    def _poll_sheets_sync(self):
+        import queue
+        if self._sheets_queue is None:
+            self._sheets_poll_job = None
+            return
+        try:
+            res = self._sheets_queue.get_nowait()
+        except queue.Empty:
+            self._sheets_poll_job = self.root.after(200, self._poll_sheets_sync)
+            return
+
+        self._sheets_poll_job = None
+        self._sheets_queue = None
+
+        mes = res.get("mes", "")
+        mes_aba = res.get("mes_aba") or formatar_mes_aba_sheets(mes)
+        marcar_mes = bool(res.get("marcar_mes", True))
+
+        if res.get("ok"):
+            marcado = registrar_sucesso_sync_sheets(mes, self.config, marcar_mes=marcar_mes)
+            if marcado:
+                msg = f"Google Sheets sincronizado ({mes_aba})"
+            else:
+                msg = f"Google Sheets atualizado ({mes_aba})"
+            self.status(msg)
+            mostrar_toast(self.root, msg)
+        else:
+            err = res.get("error") or "Erro de conexão"
+            msg = f"Falha ao sincronizar Google Sheets ({err})"
+            self.status(msg, erro=True)
+            mostrar_toast(self.root, msg)
+
+    def _verificar_contingencia_sheets(self):
+        """Retenta silenciosamente o envio do mês anterior após execução dos backups de 12h/17h."""
+        if self._sheets_poll_job is not None:
+            return
+        pend = verificar_pendencia_sheets_mes_anterior(self.config)
+        if pend:
+            self._iniciar_sync_sheets(pend["mes"], pend["dados"], marcar_mes=True, manual=False)
 
 
     # ── Export ───────────────────────────────
@@ -1656,6 +1763,23 @@ class App:
 
         if modo == "exportar":
             self._fazer_export(dados, label, titulo, marcar_mes)
+        elif modo == "sheets":
+            if periodo != "Mês" or not mes_str:
+                self.status("A exportação para Google Sheets é exclusiva por Mês.", erro=True)
+                return
+            if not sheets_configurado(self.config):
+                self.status("Google Sheets não configurado.", erro=True)
+                mostrar_toast(self.root, "Google Sheets não configurado.")
+                return
+            if not dados:
+                self.status("Nenhum registro para o mês selecionado.", erro=True)
+                mostrar_toast(self.root, "Nenhum registro para o mês selecionado.")
+                return
+            if not popup_confirmar_token_sheets(self.root, self.config):
+                return
+            mes_atual = agora().strftime("%m/%Y")
+            deve_marcar = (mes_str != mes_atual)
+            self._iniciar_sync_sheets(mes_str, dados, marcar_mes=deve_marcar, manual=True)
         elif modo == "copiar":
             if dados:
                 linhas = []
@@ -1666,8 +1790,11 @@ class App:
                 texto = "\n".join(linhas)
                 self.root.clipboard_clear()
                 self.root.clipboard_append(texto)
-                from tkinter import messagebox
-                messagebox.showinfo("Copiar Dados", "Copiado para a área de transferência", parent=self.root)
+                self.status("Copiado para a área de transferência.")
+                mostrar_toast(self.root, "Copiado para a área de transferência!")
+            else:
+                self.status("Nenhum registro para copiar.", erro=True)
+                mostrar_toast(self.root, "Nenhum registro para copiar.")
 
     # ── Copiar Dados ───────────────────────────────
 
@@ -1683,7 +1810,10 @@ class App:
 
 
     def destroy(self):
-        for job_attr in ["_status_job", "_relogio_job", "_from_dialog_job", "_novidades_job"]:
+        for job_attr in [
+            "_status_job", "_relogio_job", "_from_dialog_job",
+            "_novidades_job", "_sheets_poll_job",
+        ]:
             job_id = getattr(self, job_attr, None)
             if job_id:
                 try:
@@ -1691,6 +1821,7 @@ class App:
                 except (tk.TclError, ValueError):
                     pass
                 setattr(self, job_attr, None)
+        self._sheets_queue = None
 
         # Unbind global Ctrl+Z if they still point to our handler
         for seq, fid in getattr(self, "_global_binds", []):

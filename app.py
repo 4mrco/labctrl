@@ -7,6 +7,9 @@ from core.services import (
     run_boot_operations,
     finalizar_export_silencioso,
     iniciar_verificacao_ota_async,
+    disparar_sync_sheets_async,
+    registrar_sucesso_sync_sheets,
+    formatar_mes_aba_sheets,
 )
 
 class AppController:
@@ -19,6 +22,8 @@ class AppController:
         self.bolsista_prompted = False
         self.ota_check_started = False
         self.ota_info = None
+        self._sheets_boot_job = None
+        self._sheets_boot_queue = None
         
         # Load theme colors
         self.config = load_config()
@@ -89,8 +94,39 @@ class AppController:
         self.boot_results = run_boot_operations(self.config)
         if self.boot_results.get("export"):
             finalizar_export_silencioso(self.boot_results["export"]["mes"], self.boot_results["export"]["dados"], self.config)
+        if self.boot_results.get("sheets_pending"):
+            pend = self.boot_results["sheets_pending"]
+            self._sheets_boot_queue = disparar_sync_sheets_async(pend["mes"], pend["dados"], self.config)
+            self._sheets_boot_job = self.root.after(200, self._poll_boot_sheets_sync)
         self.boot_completed = True
         self._schedule_post_boot_tasks()
+
+    def _poll_boot_sheets_sync(self):
+        self._sheets_boot_job = None
+        if not self._sheets_boot_queue:
+            return
+        import queue
+        try:
+            res = self._sheets_boot_queue.get_nowait()
+        except queue.Empty:
+            self._sheets_boot_job = self.root.after(200, self._poll_boot_sheets_sync)
+            return
+
+        self._sheets_boot_queue = None
+        mes = res.get("mes", "")
+        if res.get("ok"):
+            registrar_sucesso_sync_sheets(mes, self.config, marcar_mes=True)
+
+        if isinstance(self.boot_results, dict):
+            self.boot_results["sheets_sync"] = res
+        elif self.mode == "dashboard":
+            from ui.dialogs import mostrar_toast
+            aba = res.get("mes_aba") or formatar_mes_aba_sheets(mes)
+            if res.get("ok"):
+                mostrar_toast(self.root, f"Google Sheets sincronizado ({aba})")
+            else:
+                err = res.get("error") or "Erro de conexão"
+                mostrar_toast(self.root, f"Falha ao sincronizar Google Sheets ({err})")
         
     def setup_dashboard(self):
         from core.config import TEMAS
@@ -181,6 +217,15 @@ class AppController:
             
         if res.get("relogio"):
             mostrar_toast(self.root, "Atenção: Relógio parece atrasado (verificado no Kiosk)")
+
+        if res.get("sheets_sync"):
+            s_res = res["sheets_sync"]
+            aba = s_res.get("mes_aba") or formatar_mes_aba_sheets(s_res.get("mes", ""))
+            if s_res.get("ok"):
+                mostrar_toast(self.root, f"Google Sheets sincronizado ({aba})")
+            else:
+                err = s_res.get("error") or "Erro de conexão"
+                mostrar_toast(self.root, f"Falha ao sincronizar Google Sheets ({err})")
             
         self.boot_results = None
 

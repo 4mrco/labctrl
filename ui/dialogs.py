@@ -1,7 +1,7 @@
 import os
 import tkinter as tk
 from datetime import datetime
-from core.config import TEMAS
+from core.config import TEMAS, NOMES_MESES, NOMES_MESES_REV
 
 def center_dialog(win: tk.Toplevel, parent: tk.Tk | tk.Toplevel):
     """Center dialog window relative to its parent window."""
@@ -54,6 +54,8 @@ def setup_dialog(win: tk.Toplevel, parent: tk.Tk | tk.Toplevel, min_width: int =
         try:
             if hasattr(parent, "_from_dialog"):
                 parent._from_dialog()
+            elif isinstance(parent, tk.Toplevel) and parent.winfo_exists():
+                parent.grab_set()
         except tk.TclError:
             pass
 
@@ -437,32 +439,68 @@ def popup_sem_matricula(parent: tk.Tk | tk.Toplevel) -> tuple[str, str] | None:
     """Retorna (nome, tipo) ou None se cancelado."""
     from core.services import validar_entrada_nome
     t = TEMAS["default"]
-    bg, fg, field = t["bg"], t["fg"], t["field"]
+    bg, fg, field, select = t["bg"], t["fg"], t["field"], t["select"]
+
     win = tk.Toplevel(parent)
     win.title("Entrada sem matrícula")
     win.configure(bg=bg)
-    setup_dialog(win, parent, min_width=320, min_height=140)
+    setup_dialog(
+        win, parent, min_width=380, min_height=230,
+        resizable=(False, False), escape_close=True,
+    )
 
-    tk.Label(win, text="Nome:", bg=bg, fg=fg).grid(row=0, column=0, sticky="w", padx=10, pady=(12, 4))
+    body = tk.Frame(win, bg=bg)
+    body.pack(fill="both", expand=True, padx=20, pady=(16, 6))
+
+    tk.Label(
+        body, text="Nome completo:",
+        bg=bg, fg=fg, font=("Segoe UI", 10, "bold"), anchor="w",
+    ).pack(fill="x", pady=(0, 4))
+
     vcmd = (win.register(validar_entrada_nome), "%P")
-    entry_nome = tk.Entry(win, width=28, bd=0, highlightthickness=0, bg=field, fg=fg,
-                          validate="key", validatecommand=vcmd)
-    entry_nome.grid(row=0, column=1, padx=10, pady=(12, 4))
+    entry_nome = tk.Entry(
+        body, bd=0, highlightthickness=0, bg=field, fg=fg,
+        insertbackground=fg, font=("Segoe UI", 10),
+        validate="key", validatecommand=vcmd,
+    )
+    entry_nome.pack(fill="x", ipady=5, pady=(0, 12))
 
-    tk.Label(win, text="Tipo:", bg=bg, fg=fg).grid(row=1, column=0, sticky="w", padx=10, pady=4)
+    tk.Label(
+        body, text="Vínculo / Tipo:",
+        bg=bg, fg=fg, font=("Segoe UI", 10, "bold"), anchor="w",
+    ).pack(fill="x", pady=(0, 4))
+
     var_tipo = tk.StringVar(value="Aluno")
-    frame_tipo = tk.Frame(win, bg=bg)
-    frame_tipo.grid(row=1, column=1, sticky="w", padx=10, pady=4)
-    tk.Radiobutton(frame_tipo, text="Aluno",    variable=var_tipo, value="Aluno", bd=0, highlightthickness=0,
-                   bg=bg, fg=fg).pack(side="left")
-    tk.Radiobutton(frame_tipo, text="Servidor", variable=var_tipo, value="Servidor", bd=0, highlightthickness=0,
-                   bg=bg, fg=fg).pack(side="left")
+    frame_tipo = tk.Frame(body, bg=bg)
+    frame_tipo.pack(fill="x", pady=(0, 6))
+
+    for opcao in ("Aluno", "Servidor"):
+        tk.Radiobutton(
+            frame_tipo, text=opcao, variable=var_tipo, value=opcao,
+            bg=bg, fg=fg, selectcolor=field, activebackground=bg,
+            activeforeground=fg, bd=0, highlightthickness=0,
+            font=("Segoe UI", 10), cursor="hand2",
+        ).pack(side="left", padx=(0, 16))
+
+    lbl_feedback = tk.Label(
+        body, text="", bg=bg, fg="#E05A47",
+        font=("Segoe UI", 9, "bold"), anchor="w",
+    )
+    lbl_feedback.pack(fill="x", pady=(2, 0))
+
+    def _limpar_feedback(*_):
+        if lbl_feedback.winfo_exists() and lbl_feedback.cget("text"):
+            lbl_feedback.configure(text="")
+
+    entry_nome.bind("<KeyRelease>", _limpar_feedback, add="+")
 
     resultado = {"valor": None}
 
     def confirmar(event=None):
         nome = entry_nome.get().strip()
         if not nome:
+            lbl_feedback.configure(text="Informe o nome para continuar.", fg="#E05A47")
+            entry_nome.focus_set()
             return "break"
         resultado["valor"] = (nome, var_tipo.get())
         win.destroy()
@@ -471,9 +509,26 @@ def popup_sem_matricula(parent: tk.Tk | tk.Toplevel) -> tuple[str, str] | None:
     entry_nome.bind("<Return>", confirmar)
     win.bind("<Return>", confirmar)
     win.bind("<KP_Enter>", confirmar)
-    select_btn = "#35383e"
-    tk.Button(win, text="Salvar", command=confirmar, bd=0, highlightthickness=0,
-              bg=select_btn, fg=fg).grid(row=2, column=0, columnspan=2, pady=(4, 12))
+
+    btn_frame = tk.Frame(win, bg=bg)
+    btn_frame.pack(side="bottom", pady=(8, 16))
+
+    btn_cancelar = tk.Button(
+        btn_frame, text="Cancelar", command=win.destroy,
+        bd=0, highlightthickness=0, bg="#35383e", fg=fg,
+        activebackground=select, activeforeground=fg,
+        padx=18, pady=6, font=("Segoe UI", 9, "bold"), cursor="hand2",
+    )
+    btn_cancelar.pack(side="left", padx=6)
+
+    btn_confirmar = tk.Button(
+        btn_frame, text="Confirmar", command=confirmar,
+        bd=0, highlightthickness=0, bg="#1E4D8C", fg="#FFFFFF",
+        activebackground="#2A62AB", activeforeground="#FFFFFF",
+        padx=18, pady=6, font=("Segoe UI", 9, "bold"), cursor="hand2",
+    )
+    btn_confirmar.pack(side="left", padx=6)
+
     focus_first_field(entry_nome)
     win.wait_window()
     return resultado["valor"]
@@ -820,7 +875,7 @@ def copiar_periodo(parent, periodo: str, mes_ativo: str):
         texto = "\n".join(linhas)
         parent.clipboard_clear()
         parent.clipboard_append(texto)
-        messagebox.showinfo("Copiar Dados", "Copiado para a área de transferência", parent=parent)
+        mostrar_toast(parent, "Copiado para a área de transferência!")
 
 
 
@@ -889,10 +944,6 @@ def visualizar_db(parent):
     control_frame.pack(fill="x", padx=10, pady=(0, 8))
 
     meses_raw = buscar_meses()  # ["09/2026", "08/2026", ...]
-    nomes_mes = {"01": "Janeiro", "02": "Fevereiro", "03": "Março", "04": "Abril",
-                 "05": "Maio", "06": "Junho", "07": "Julho", "08": "Agosto",
-                 "09": "Setembro", "10": "Outubro", "11": "Novembro", "12": "Dezembro"}
-    nomes_mes_rev = {v: k for k, v in nomes_mes.items()}
 
     # Group months by year: {"2026": ["09", "08", ...], ...}
     from collections import OrderedDict
@@ -920,7 +971,7 @@ def visualizar_db(parent):
         """Repopulate month combobox when year changes, then refresh."""
         y = var_ano.get()
         month_nums = anos_map.get(y, [])
-        month_names = [nomes_mes[n] for n in month_nums]
+        month_names = [NOMES_MESES[n] for n in month_nums]
         combo_mes_nome["values"] = month_names
         if month_names:
             combo_mes_nome.set(month_names[0])
@@ -928,10 +979,10 @@ def visualizar_db(parent):
 
     combo_ano.bind("<<ComboboxSelected>>", _repopular_meses)
 
-    tk.Label(control_frame, text="🔍", bg=bg, fg=fg).pack(side="right", padx=(8, 0))
     var_busca = tk.StringVar()
     tk.Entry(control_frame, textvariable=var_busca, width=28, bd=0, highlightthickness=0,
-             bg=field, fg=fg).pack(side="right", padx=(0, 8))
+             bg=field, fg=fg, insertbackground=fg).pack(side="right", padx=(0, 4), ipady=2)
+    tk.Label(control_frame, text="Buscar:", bg=bg, fg=fg, font=("Segoe UI", 9)).pack(side="right", padx=(8, 4))
 
     # ── BOTTOM: Single Treeview ──────────────────────────────────
     tree_frame = tk.Frame(win, bg=bg)
@@ -941,8 +992,80 @@ def visualizar_db(parent):
     tree = ttk.Treeview(tree_frame, columns=cols, show="headings")
     col_widths = {"Nome": 160, "Matrícula": 90, "Data": 90, "Entrada": 70,
                   "Saída": 70, "Máquina": 70, "Bolsista": 120}
+
+    sort_state: dict[str, tuple[str, bool] | None] = {"current": None}
+
+    def _minutos_entrada(val: str) -> int:
+        s = str(val or "").strip()
+        if ":" in s:
+            partes = s.split(":")
+            if len(partes) >= 2:
+                try:
+                    return int(partes[0]) * 60 + int(partes[1])
+                except ValueError:
+                    pass
+        return -1
+
+    def _data_int(val: str) -> int:
+        s = str(val or "").strip()
+        if "/" in s:
+            partes = s.split("/")
+            if len(partes) == 3:
+                try:
+                    d, m, y = int(partes[0]), int(partes[1]), int(partes[2])
+                    return y * 10000 + m * 100 + d
+                except ValueError:
+                    pass
+        return 0
+
+    def _sort_key_for_item(col_name: str, reverse: bool, vals: list | tuple):
+        idx = cols.index(col_name)
+        if col_name == "Data":
+            prim = _data_int(vals[2])
+        elif col_name in ("Entrada", "Saída"):
+            prim = _minutos_entrada(vals[idx])
+        else:
+            prim = str(vals[idx] or "").strip().lower()
+
+        ent = _minutos_entrada(vals[3])
+        dt = _data_int(vals[2])
+
+        if col_name == "Data":
+            # Mesma data: ordenação secundária pela hora de entrada decrescente
+            sec = ent if reverse else -ent
+            return (prim, sec)
+        elif col_name == "Entrada":
+            # Mesma hora de entrada: ordenação secundária por data decrescente
+            sec = dt if reverse else -dt
+            return (prim, sec)
+        else:
+            # Demais colunas: ordenação secundária por data decrescente e entrada decrescente
+            sec1 = dt if reverse else -dt
+            sec2 = ent if reverse else -ent
+            return (prim, sec1, sec2)
+
+    def _aplicar_ordenacao(col_name: str, reverse: bool):
+        items = [(tree.item(i)["values"], i) for i in tree.get_children()]
+        items.sort(
+            key=lambda x: _sort_key_for_item(col_name, reverse, x[0]),
+            reverse=reverse,
+        )
+        for order, (_, item) in enumerate(items):
+            tree.move(item, "", order)
+        for c in cols:
+            arrow = (" ↓" if reverse else " ↑") if c == col_name else ""
+            tree.heading(c, text=c + arrow, command=lambda cc=c: _ordenar(cc))
+
+    def _ordenar(col_name: str):
+        reverse = False
+        estado = sort_state.get("current")
+        if estado and estado[0] == col_name:
+            reverse = not estado[1]
+        sort_state["current"] = (col_name, reverse)
+        _aplicar_ordenacao(col_name, reverse)
+
     for col in cols:
-        tree.heading(col, text=col)
+        tree.heading(col, text=col, command=lambda c=col: _ordenar(c))
         tree.column(col, width=col_widths.get(col, 80), anchor="center")
     tree.column("Nome", anchor="w")
 
@@ -951,24 +1074,30 @@ def visualizar_db(parent):
     vsb.pack(side="right", fill="y")
     tree.pack(fill="both", expand=True)
 
-    # ── Load all month data once ─────────────────────────────────
+    # ── Lazy Load month data on demand with cache ────────────────
     todos: dict[str, list[tuple]] = {}
-    for mes in meses_raw:
-        dados = buscar_registros_por_mes(mes)
-        todos[mes] = []
-        for r in dados:
-            _, nome, matricula, data, entrada, saida, maquina, bolsista, _ = r
-            if not matricula:
-                mat_exib = ""
-            elif matricula == "SERVIDOR":
-                mat_exib = "Servidor"
-            elif matricula.startswith("SRV-"):
-                mat_exib = "Servidor"
-            else:
-                mat_exib = matricula
-            maq_exib = "ML" if str(maquina).startswith("ML-") else maquina
-            row = (nome, mat_exib, data, entrada, saida or "", maq_exib or "-", bolsista or "")
-            todos[mes].append(row)
+
+    def _carregar_mes(mes: str) -> list[tuple]:
+        if mes not in todos:
+            dados = buscar_registros_por_mes(mes)
+            linhas = []
+            for r in dados:
+                _, nome, matricula, data, entrada, saida, maquina, bolsista, _ = r
+                if not matricula:
+                    mat_exib = ""
+                elif matricula == "SERVIDOR" or matricula.startswith("SRV-"):
+                    mat_exib = "Servidor"
+                else:
+                    mat_exib = matricula
+                maq_exib = "ML" if str(maquina).startswith("ML-") else maquina
+                row = (nome, mat_exib, data, entrada, saida or "", maq_exib or "-", bolsista or "")
+                linhas.append(row)
+            linhas.sort(
+                key=lambda r: (_data_int(r[2]), _minutos_entrada(r[3])),
+                reverse=True,
+            )
+            todos[mes] = linhas
+        return todos[mes]
 
     # ── Helpers ──────────────────────────────────────────────────
     def _fmt_mins(total_mins: int) -> str:
@@ -978,20 +1107,23 @@ def visualizar_db(parent):
     def atualizar_tela(*_):
         ano = var_ano.get()
         mes_nome = var_mes_nome.get()
-        mes_num = nomes_mes_rev.get(mes_nome, "")
+        mes_num = NOMES_MESES_REV.get(mes_nome, "")
         mes_atual = f"{mes_num}/{ano}" if mes_num and ano else ""
-        if not mes_atual or mes_atual not in todos:
+        if not mes_atual or mes_atual not in meses_raw:
             return
+        rows = _carregar_mes(mes_atual)
         termo = var_busca.get().lower()
 
         # Populate treeview (filtered)
         tree.delete(*tree.get_children())
-        for row in todos[mes_atual]:
+        for row in rows:
             if not termo or termo in row[0].lower() or termo in str(row[1]).lower():
                 tree.insert("", "end", values=row)
 
+        if sort_state["current"] is not None:
+            _aplicar_ordenacao(*sort_state["current"])
+
         # Calculate stats from full (unfiltered) month data
-        rows = todos[mes_atual]
         visitas = len(rows)
         pessoas = len({row[1] if row[1] else row[0] for row in rows})
 
@@ -1459,7 +1591,7 @@ def abrir_form_edicao(parent, rid: int, on_success_callback=None):
 # ── Nova Janela Unificada Exportar / Copiar ──────────────
 
 def abrir_janela_exportar(parent, mes_ativo_default: str, callback_acao):
-    """Abre janela unificada para Exportar (CSV) ou Copiar Dados."""
+    """Abre janela unificada para Exportar (Local CSV / Nuvem Sheets) ou Copiar Dados."""
     t = TEMAS["default"]
     bg, fg, field = t["bg"], t["fg"], t["field"]
     titulo = "Exportar / Copiar Dados"
@@ -1467,7 +1599,7 @@ def abrir_janela_exportar(parent, mes_ativo_default: str, callback_acao):
     win = tk.Toplevel(parent)
     win.title(titulo)
     win.configure(bg=bg)
-    setup_dialog(win, parent, min_width=380, min_height=260,
+    setup_dialog(win, parent, min_width=540, min_height=260,
                  resizable=(False, False), escape_close=True)
 
     tk.Label(win, text="Selecione o período desejado:",
@@ -1479,10 +1611,6 @@ def abrir_janela_exportar(parent, mes_ativo_default: str, callback_acao):
 
     # Reusing months logic
     meses_raw = buscar_meses()
-    nomes_mes = {"01": "Janeiro", "02": "Fevereiro", "03": "Março", "04": "Abril",
-                 "05": "Maio", "06": "Junho", "07": "Julho", "08": "Agosto",
-                 "09": "Setembro", "10": "Outubro", "11": "Novembro", "12": "Dezembro"}
-    nomes_mes_rev = {v: k for k, v in nomes_mes.items()}
     
     from collections import OrderedDict
     anos_map = OrderedDict()
@@ -1508,7 +1636,7 @@ def abrir_janela_exportar(parent, mes_ativo_default: str, callback_acao):
     def _repopular_meses(*_):
         y = var_ano.get()
         month_nums = anos_map.get(y, [])
-        month_names = [nomes_mes[n] for n in month_nums]
+        month_names = [NOMES_MESES[n] for n in month_nums]
         combo_mes_nome["values"] = month_names
         if month_names:
             combo_mes_nome.set(month_names[0])
@@ -1521,18 +1649,59 @@ def abrir_janela_exportar(parent, mes_ativo_default: str, callback_acao):
         if yyyy_def in anos_map:
             var_ano.set(yyyy_def)
             _repopular_meses()
-            nome_def = nomes_mes.get(mm_def)
+            nome_def = NOMES_MESES.get(mm_def)
             if nome_def in combo_mes_nome["values"]:
                 var_mes_nome.set(nome_def)
     elif anos:
         var_ano.set(anos[0])
         _repopular_meses()
 
+    def _executar(modo: str):
+        periodo = var_periodo.get()
+        mes_str = None
+        if periodo == "Mês":
+            ano = var_ano.get()
+            mes_nome = var_mes_nome.get()
+            mes_num = NOMES_MESES_REV.get(mes_nome, "")
+            mes_str = f"{mes_num}/{ano}" if mes_num and ano else ""
+        
+        callback_acao(modo, periodo, mes_str)
+        win.destroy()
+
+    btn_frame = tk.Frame(win, bg=bg)
+    btn_frame.pack(side="bottom", pady=(15, 16))
+    
+    btn_csv = tk.Button(
+        btn_frame, text="Exportar Local (CSV)", command=lambda: _executar("exportar"),
+        bd=0, highlightthickness=0, bg="#35383e", fg=fg,
+        padx=14, pady=6, font=("Segoe UI", 9, "bold"), cursor="hand2"
+    )
+    btn_csv.pack(side="left", padx=5)
+
+    btn_sheets = tk.Button(
+        btn_frame, text="Exportar Nuvem (Sheets)", command=lambda: _executar("sheets"),
+        bd=0, highlightthickness=0, bg="#1E4D8C", fg="#FFFFFF",
+        activebackground="#2A62AB", activeforeground="#FFFFFF",
+        disabledforeground="#6D7178",
+        padx=14, pady=6, font=("Segoe UI", 9, "bold"), cursor="hand2",
+        state="disabled",
+    )
+    btn_sheets.pack(side="left", padx=5)
+              
+    btn_copy = tk.Button(
+        btn_frame, text="Copiar p. área de transf.", command=lambda: _executar("copiar"),
+        bd=0, highlightthickness=0, bg="#35383e", fg=fg,
+        padx=14, pady=6, font=("Segoe UI", 9, "bold"), cursor="hand2"
+    )
+    btn_copy.pack(side="left", padx=5)
+
     def _update_ui(*_):
         if var_periodo.get() == "Mês":
             frame_mes.pack(pady=10)
+            btn_sheets.configure(state="normal", bg="#1E4D8C")
         else:
             frame_mes.pack_forget()
+            btn_sheets.configure(state="disabled", bg="#2a2d32")
 
     for p in ["Hoje", "Ontem", "Semana", "Mês"]:
         tk.Radiobutton(frame_radios, text=p, variable=var_periodo, value=p,
@@ -1541,28 +1710,452 @@ def abrir_janela_exportar(parent, mes_ativo_default: str, callback_acao):
                        
     _update_ui()
 
-    def _executar(modo: str):
-        periodo = var_periodo.get()
-        mes_str = None
-        if periodo == "Mês":
-            ano = var_ano.get()
-            mes_nome = var_mes_nome.get()
-            mes_num = nomes_mes_rev.get(mes_nome, "")
-            mes_str = f"{mes_num}/{ano}" if mes_num and ano else ""
-        
-        callback_acao(modo, periodo, mes_str)
+
+def popup_instrucoes_sheets(parent: tk.Tk | tk.Toplevel):
+    """Exibe janela modal com as instruções de implantação do Apps Script."""
+    t = TEMAS["default"]
+    bg, fg, field, select = t["bg"], t["fg"], t["field"], t["select"]
+
+    win = tk.Toplevel(parent)
+    win.title("Instruções — Google Sheets")
+    win.configure(bg=bg)
+    setup_dialog(win, parent, min_width=520, min_height=360, resizable=(False, False), escape_close=True)
+
+    body = tk.Frame(win, bg=bg)
+    body.pack(fill="both", expand=True, padx=20, pady=16)
+
+    tk.Label(
+        body, text="Como configurar a integração no Google Drive:",
+        bg=bg, fg=fg, font=("Segoe UI", 10, "bold"), anchor="w",
+    ).pack(fill="x", pady=(0, 10))
+
+    passos = [
+        "1. Abra a planilha no Google Drive e acesse: Extensões > Apps Script.",
+        "2. Apague o código padrão e cole o script do webhook (botão 'Copiar Script').",
+        "3. No menu lateral (engrenagem), acesse Propriedades do script e adicione:\n   - Propriedade: TOKEN\n   - Valor: (defina um token de sua preferência).",
+        "4. Clique em Implantar > Nova implantação > App da Web:\n   - Executar como: Eu (seu e-mail)\n   - Quem pode acessar: Qualquer pessoa",
+        "5. Copie a URL gerada (/exec) e cole-a junto com o Token na janela do LabCTRL.",
+        "Nota: Se atualizar o código do script no futuro, acesse Implantar > Gerenciar implantações > Editar (lápis) > Versão: Nova versão > Salvar.",
+    ]
+
+    for p in passos:
+        tk.Label(
+            body, text=p, bg=bg, fg=fg, font=("Segoe UI", 9),
+            justify="left", anchor="w", wraplength=480,
+        ).pack(fill="x", pady=(0, 8))
+
+    btn_ok = tk.Button(
+        win, text="Entendi", command=win.destroy,
+        bd=0, highlightthickness=0, bg="#1E4D8C", fg="#FFFFFF",
+        activebackground="#2A62AB", activeforeground="#FFFFFF",
+        padx=20, pady=6, font=("Segoe UI", 9, "bold"), cursor="hand2",
+    )
+    btn_ok.pack(pady=(0, 16))
+    win.wait_window()
+
+
+def abrir_configuracao_sheets(
+    parent: tk.Tk | tk.Toplevel,
+    config: dict,
+    on_save_callback=None,
+    opener=None,
+) -> bool:
+    """Abre janela modal dedicada para configurar URL e Token do Google Sheets."""
+    import queue
+    from core.services import salvar_credenciais_sheets
+    from core.sheets import testar_conexao_sheets
+
+    t = TEMAS["default"]
+    bg, fg, field, select = t["bg"], t["fg"], t["field"], t["select"]
+
+    win = tk.Toplevel(parent)
+    win.title("Configurar Google Sheets")
+    win.configure(bg=bg)
+    setup_dialog(
+        win, parent, min_width=520, min_height=320,
+        resizable=(False, False), escape_close=True,
+    )
+
+    placeholder_url = "https://script.google.com/macros/s/.../exec"
+    url_inicial = str(config.get("sheets_webhook_url") or "").strip()
+    token_inicial = str(config.get("sheets_webhook_token") or "").strip()
+
+    body = tk.Frame(win, bg=bg)
+    body.pack(fill="both", expand=True, padx=20, pady=(16, 8))
+
+    # Barra superior de ajuda e cópia de script
+    top_bar = tk.Frame(body, bg=bg)
+    top_bar.pack(fill="x", pady=(0, 12))
+
+    def _copiar_script():
+        from core.config import BASE_DIR
+        gs_path = os.path.join(BASE_DIR, "scripts", "sheets_webhook.gs")
+        try:
+            with open(gs_path, "r", encoding="utf-8") as f:
+                codigo = f.read()
+            win.clipboard_clear()
+            win.clipboard_append(codigo)
+            mostrar_toast(win, "Script copiado para a área de transferência!")
+        except Exception as e:
+            mostrar_toast(win, f"Erro ao ler script: {e}")
+
+    btn_copiar = tk.Button(
+        top_bar, text="Copiar Script", command=_copiar_script,
+        bd=0, highlightthickness=0, bg=field, fg=fg,
+        activebackground=select, activeforeground=fg,
+        padx=12, pady=4, font=("Segoe UI", 9), cursor="hand2",
+    )
+    btn_copiar.pack(side="left")
+
+    btn_ajuda = tk.Button(
+        top_bar, text="?", command=lambda: popup_instrucoes_sheets(win),
+        bd=0, highlightthickness=0, bg=field, fg=fg,
+        activebackground=select, activeforeground=fg,
+        padx=9, pady=4, font=("Segoe UI", 9, "bold"), cursor="hand2",
+    )
+    btn_ajuda.pack(side="left", padx=(8, 0))
+
+    # Campo 1: URL do Webhook
+    tk.Label(
+        body, text="URL do Webhook (Apps Script):",
+        bg=bg, fg=fg, font=("Segoe UI", 10, "bold"), anchor="w",
+    ).pack(fill="x", pady=(0, 4))
+
+    entry_url = tk.Entry(
+        body, bd=0, highlightthickness=0, bg=field, fg=fg,
+        insertbackground=fg, font=("Segoe UI", 10),
+    )
+    entry_url.pack(fill="x", ipady=5, pady=(0, 12))
+
+    has_placeholder = [False]
+
+    def _set_url_placeholder():
+        if not entry_url.get().strip():
+            has_placeholder[0] = True
+            entry_url.delete(0, tk.END)
+            entry_url.insert(0, placeholder_url)
+            entry_url.configure(fg="#888888")
+
+    def _clear_url_placeholder(event=None):
+        if has_placeholder[0]:
+            has_placeholder[0] = False
+            entry_url.delete(0, tk.END)
+            entry_url.configure(fg=fg)
+
+    def _get_url_value() -> str:
+        val = entry_url.get().strip()
+        if has_placeholder[0] or val == placeholder_url:
+            return ""
+        return val
+
+    if url_inicial:
+        entry_url.insert(0, url_inicial)
+    else:
+        _set_url_placeholder()
+
+    entry_url.bind("<FocusIn>", _clear_url_placeholder)
+    entry_url.bind("<FocusOut>", lambda e: _set_url_placeholder())
+
+    # Campo 2: Token com estado protegido e botão Alterar
+    tk.Label(
+        body, text="Token:",
+        bg=bg, fg=fg, font=("Segoe UI", 10, "bold"), anchor="w",
+    ).pack(fill="x", pady=(0, 4))
+
+    token_row = tk.Frame(body, bg=bg)
+    token_row.pack(fill="x", pady=(0, 10))
+
+    modo_edicao = [not bool(token_inicial)]
+    token_visivel = [False]
+
+    # Estado A: Token já configurado (protegido visualmente)
+    frame_token_salvo = tk.Frame(token_row, bg=bg)
+    lbl_token_salvo = tk.Label(
+        frame_token_salvo, text="Configurado  ••••••••",
+        bg=field, fg="#888888", font=("Segoe UI", 10),
+        anchor="w", padx=10,
+    )
+    lbl_token_salvo.pack(side="left", fill="x", expand=True, ipady=5)
+
+    def _ativar_edicao_token():
+        modo_edicao[0] = True
+        frame_token_salvo.pack_forget()
+        frame_token_edit.pack(fill="x")
+        entry_token.delete(0, tk.END)
+        entry_token.focus_set()
+
+    def _cancelar_edicao_token():
+        modo_edicao[0] = False
+        frame_token_edit.pack_forget()
+        frame_token_salvo.pack(fill="x")
+        entry_token.delete(0, tk.END)
+
+    btn_alterar_token = tk.Button(
+        frame_token_salvo, text="Alterar", command=_ativar_edicao_token,
+        bd=0, highlightthickness=0, bg=field, fg=fg,
+        activebackground=select, activeforeground=fg,
+        padx=12, pady=5, font=("Segoe UI", 9), cursor="hand2",
+    )
+    btn_alterar_token.pack(side="right", padx=(8, 0))
+
+    # Estado B: Campo para digitar novo token
+    frame_token_edit = tk.Frame(token_row, bg=bg)
+    entry_token = tk.Entry(
+        frame_token_edit, bd=0, highlightthickness=0, bg=field, fg=fg,
+        insertbackground=fg, font=("Segoe UI", 10), show="•",
+    )
+    entry_token.pack(side="left", fill="x", expand=True, ipady=5)
+
+    def _toggle_token_visibilidade():
+        token_visivel[0] = not token_visivel[0]
+        if token_visivel[0]:
+            btn_toggle.configure(text="Ocultar")
+            entry_token.configure(show="")
+        else:
+            btn_toggle.configure(text="Mostrar")
+            entry_token.configure(show="•")
+
+    btn_toggle = tk.Button(
+        frame_token_edit, text="Mostrar", command=_toggle_token_visibilidade,
+        bd=0, highlightthickness=0, bg=field, fg=fg,
+        activebackground=select, activeforeground=fg,
+        padx=10, pady=5, font=("Segoe UI", 9), cursor="hand2",
+    )
+    btn_toggle.pack(side="right", padx=(8, 0))
+
+    if token_inicial:
+        btn_cancelar_edicao = tk.Button(
+            frame_token_edit, text="Cancelar", command=_cancelar_edicao_token,
+            bd=0, highlightthickness=0, bg="#2a2d32", fg="#aaaaaa",
+            activebackground=select, activeforeground=fg,
+            padx=10, pady=5, font=("Segoe UI", 9), cursor="hand2",
+        )
+        btn_cancelar_edicao.pack(side="right", padx=(8, 0))
+        frame_token_salvo.pack(fill="x")
+    else:
+        frame_token_edit.pack(fill="x")
+
+    def _get_token_value() -> str:
+        if not modo_edicao[0]:
+            return ""
+        return entry_token.get().strip()
+
+    # Label de Feedback
+    lbl_feedback = tk.Label(
+        body, text="", bg=bg, fg="#B5BAC1",
+        font=("Segoe UI", 9, "bold"), anchor="w",
+    )
+    lbl_feedback.pack(fill="x", pady=(2, 4))
+
+    poll_state = {"job": None, "queue": None}
+    resultado = {"salvo": False}
+
+    def _cancel_poll():
+        if poll_state["job"] is not None:
+            try:
+                win.after_cancel(poll_state["job"])
+            except Exception:
+                pass
+            poll_state["job"] = None
+
+    def _testar_conexao():
+        _cancel_poll()
+        url_val = _get_url_value()
+        novo_tok = _get_token_value()
+        token_val = novo_tok if modo_edicao[0] else (token_inicial if url_val else "")
+        if not url_val or not url_val.startswith("https://") or not token_val:
+            lbl_feedback.configure(
+                text="Falha: URL inacessível ou token incorreto",
+                fg="#E05A47",
+            )
+            return
+
+        lbl_feedback.configure(text="Testando...", fg="#F0A500")
+        btn_testar.configure(state="disabled")
+        q: queue.Queue = queue.Queue()
+        poll_state["queue"] = q
+
+        def _worker():
+            res = testar_conexao_sheets(url_val, token_val, timeout=6, opener=opener)
+            q.put(res)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+        def _poll():
+            if not win.winfo_exists():
+                return
+            try:
+                res = q.get_nowait()
+            except queue.Empty:
+                poll_state["job"] = win.after(150, _poll)
+                return
+            poll_state["job"] = None
+            btn_testar.configure(state="normal")
+            if res.get("ok"):
+                lbl_feedback.configure(
+                    text="Conexão estabelecida com sucesso!",
+                    fg="#4EC97B",
+                )
+            else:
+                lbl_feedback.configure(
+                    text="Falha: URL inacessível ou token incorreto",
+                    fg="#E05A47",
+                )
+
+        poll_state["job"] = win.after(150, _poll)
+
+    def _salvar(event=None):
+        url_val = _get_url_value()
+        if modo_edicao[0]:
+            token_val = entry_token.get().strip()
+        else:
+            token_val = token_inicial if url_val else ""
+
+        # Permite limpar ambos os campos para desativar, ou exige URL https:// + token
+        if (url_val or token_val) and (not url_val.startswith("https://") or not token_val):
+            lbl_feedback.configure(
+                text="Preencha uma URL HTTPS válida e o Token.",
+                fg="#E05A47",
+            )
+            return
+
+        _cancel_poll()
+        salvar_credenciais_sheets(config, url_val, token_val)
+        resultado["salvo"] = True
+        if on_save_callback:
+            try:
+                on_save_callback()
+            except Exception:
+                pass
+        top_root = parent.winfo_toplevel()
+        win.destroy()
+        mostrar_toast(top_root, "Configuração do Google Sheets salva.")
+
+    def _fechar():
+        _cancel_poll()
         win.destroy()
 
+    win.protocol("WM_DELETE_WINDOW", _fechar)
+
+    # Barra inferior de botões
+    bottom = tk.Frame(win, bg=bg)
+    bottom.pack(side="bottom", fill="x", padx=20, pady=(4, 16))
+
+    btn_testar = tk.Button(
+        bottom, text="Testar Conexão", command=_testar_conexao,
+        bd=0, highlightthickness=0, bg=field, fg=fg,
+        activebackground=select, activeforeground=fg,
+        padx=14, pady=6, font=("Segoe UI", 9, "bold"), cursor="hand2",
+    )
+    btn_testar.pack(side="left")
+
+    btn_cancelar = tk.Button(
+        bottom, text="Cancelar", command=_fechar,
+        bd=0, highlightthickness=0, bg="#2a2d32", fg="#aaaaaa",
+        activebackground=select, activeforeground=fg,
+        padx=16, pady=6, font=("Segoe UI", 9), cursor="hand2",
+    )
+    btn_cancelar.pack(side="right", padx=(8, 0))
+
+    btn_salvar = tk.Button(
+        bottom, text="Salvar", command=_salvar,
+        bd=0, highlightthickness=0, bg="#1E4D8C", fg="#FFFFFF",
+        activebackground="#2A62AB", activeforeground="#FFFFFF",
+        padx=20, pady=6, font=("Segoe UI", 9, "bold"), cursor="hand2",
+    )
+    btn_salvar.pack(side="right")
+
+    if url_inicial:
+        entry_url.focus_set()
+    win.wait_window()
+    return resultado["salvo"]
+
+
+def popup_confirmar_token_sheets(parent: tk.Tk | tk.Toplevel, config: dict) -> bool:
+    """Solicita confirmação do Token salvo antes de disparar uma exportação manual para o Google Sheets."""
+    t = TEMAS["default"]
+    bg, fg, field, select = t["bg"], t["fg"], t["field"], t["select"]
+
+    win = tk.Toplevel(parent)
+    win.title("Confirmar Token — Google Sheets")
+    win.configure(bg=bg)
+    setup_dialog(
+        win, parent, min_width=380, min_height=200,
+        resizable=(False, False), escape_close=True,
+    )
+
+    body = tk.Frame(win, bg=bg)
+    body.pack(fill="both", expand=True, padx=20, pady=(16, 6))
+
+    tk.Label(
+        body, text="Digite o Token para autorizar a exportação manual:",
+        bg=bg, fg=fg, font=("Segoe UI", 10, "bold"), anchor="w",
+    ).pack(fill="x", pady=(0, 8))
+
+    entry_token = tk.Entry(
+        body, bd=0, highlightthickness=0, bg=field, fg=fg,
+        insertbackground=fg, font=("Segoe UI", 10), show="•",
+    )
+    entry_token.pack(fill="x", ipady=5, pady=(0, 8))
+
+    lbl_feedback = tk.Label(
+        body, text="", bg=bg, fg="#E05A47",
+        font=("Segoe UI", 9, "bold"), anchor="w",
+    )
+    lbl_feedback.pack(fill="x", pady=(2, 0))
+
+    def _limpar_feedback(*_):
+        if lbl_feedback.winfo_exists() and lbl_feedback.cget("text"):
+            lbl_feedback.configure(text="")
+
+    entry_token.bind("<KeyRelease>", _limpar_feedback, add="+")
+
+    resultado = {"autorizado": False}
+
+    def confirmar(event=None):
+        digitado = entry_token.get().strip()
+        esperado = str(config.get("sheets_webhook_token") or "").strip()
+        if not digitado:
+            lbl_feedback.configure(text="Informe o token para continuar.", fg="#E05A47")
+            entry_token.focus_set()
+            return "break"
+        if digitado != esperado:
+            lbl_feedback.configure(text="Token incorreto.", fg="#E05A47")
+            entry_token.focus_set()
+            entry_token.select_range(0, tk.END)
+            return "break"
+        resultado["autorizado"] = True
+        win.destroy()
+        return "break"
+
+    entry_token.bind("<Return>", confirmar)
+    win.bind("<Return>", confirmar)
+    win.bind("<KP_Enter>", confirmar)
+
     btn_frame = tk.Frame(win, bg=bg)
-    btn_frame.pack(pady=(15, 10))
-    
-    tk.Button(btn_frame, text="Exportar arquivo CSV", command=lambda: _executar("exportar"),
-              bd=0, highlightthickness=0, bg="#35383e", fg=fg,
-              padx=15, pady=6, font=("Segoe UI", 9, "bold")).pack(side="left", padx=5)
-              
-    tk.Button(btn_frame, text="Copiar p. área de transf.", command=lambda: _executar("copiar"),
-              bd=0, highlightthickness=0, bg="#35383e", fg=fg,
-              padx=15, pady=6, font=("Segoe UI", 9, "bold")).pack(side="left", padx=5)
+    btn_frame.pack(side="bottom", pady=(8, 16))
+
+    btn_cancelar = tk.Button(
+        btn_frame, text="Cancelar", command=win.destroy,
+        bd=0, highlightthickness=0, bg="#35383e", fg=fg,
+        activebackground=select, activeforeground=fg,
+        padx=18, pady=6, font=("Segoe UI", 9, "bold"), cursor="hand2",
+    )
+    btn_cancelar.pack(side="left", padx=6)
+
+    btn_confirmar = tk.Button(
+        btn_frame, text="Confirmar", command=confirmar,
+        bd=0, highlightthickness=0, bg="#1E4D8C", fg="#FFFFFF",
+        activebackground="#2A62AB", activeforeground="#FFFFFF",
+        padx=18, pady=6, font=("Segoe UI", 9, "bold"), cursor="hand2",
+    )
+    btn_confirmar.pack(side="left", padx=6)
+
+    focus_first_field(entry_token)
+    win.wait_window()
+    return resultado["autorizado"]
+
+
 
 
 

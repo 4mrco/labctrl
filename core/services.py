@@ -15,7 +15,7 @@ import zipfile
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
-from core.config import CONFIG_FILE, EXPORT_DIR, DB_FILE, BASE_DIR, VERSAO_ATUAL
+from core.config import CONFIG_FILE, EXPORT_DIR, DB_FILE, BASE_DIR, VERSAO_ATUAL, NOMES_MESES
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +49,9 @@ DEFAULT_CONFIG = {
     "repo_updater_owner": "4mrco",
     "repo_updater_name": "labctrl",
     "ota_postergado_em": "",
+    "sheets_webhook_url": "",
+    "sheets_webhook_token": "",
+    "sheets_synced_months": [],
 }
 
 
@@ -86,6 +89,13 @@ def load_config() -> dict:
 
     if not isinstance(cfg.get("maquinas_defeito"), dict):
         cfg["maquinas_defeito"] = {}
+
+    if not isinstance(cfg.get("sheets_synced_months"), list):
+        cfg["sheets_synced_months"] = []
+
+    for str_key in ("sheets_webhook_url", "sheets_webhook_token"):
+        val = cfg.get(str_key)
+        cfg[str_key] = val.strip() if isinstance(val, str) else ""
 
     return cfg
 
@@ -627,6 +637,7 @@ def run_boot_operations(config: dict) -> dict:
         "backups": [],
         "orfaos": [],
         "export": None,
+        "sheets_pending": None,
         "relogio": None
     }
     
@@ -647,18 +658,20 @@ def run_boot_operations(config: dict) -> dict:
         config["orfaos_sem_saida"] = orfaos_sem_saida
         save_config(config)
         
-    # 3. Export Pendente
-    from core.services import mes_anterior
+    # 3. Export Pendente (Local CSV e Google Sheets)
     mes_ant = mes_anterior()
-    if mes_ant not in config.get("exported_months", []):
+    precisa_csv = mes_ant not in config.get("exported_months", [])
+    precisa_sheets = (
+        sheets_configurado(config)
+        and mes_ant not in config.get("sheets_synced_months", [])
+    )
+    if precisa_csv or precisa_sheets:
         dados = db.buscar_export_mes(mes_ant)
         if dados:
-            # We don't write the CSV here to avoid UI duplication, or we write it here?
-            # The spec says it runs silently. Let's do the CSV logic here if it's not strictly UI.
-            # But the UI handles CSV writing in `_fazer_export` with stats. 
-            # We can return `mes_ant` and the dashboard writes it, or the kiosk does it.
-            # Wait, the kiosk needs to do it silently.
-            results["export"] = {"mes": mes_ant, "dados": dados}
+            if precisa_csv:
+                results["export"] = {"mes": mes_ant, "dados": dados}
+            if precisa_sheets:
+                results["sheets_pending"] = {"mes": mes_ant, "dados": dados}
             
     # 4. Relógio
     reg = db.buscar_ultimo_registro()
@@ -714,18 +727,9 @@ def normalizar_matricula_export(m: str | None) -> str:
     return m_str
 
 
-def gerar_relatorio_csv(dados: list[tuple], label: str, titulo: str) -> str:
-    """Gera o arquivo CSV canônico de relatório do laboratório.
-
-    Contém:
-      1. Cabeçalho com métricas gerais do laboratório
-      2. Resumo individual por pessoa em blocos de 10 (paginados em grupos de até 50)
-      3. Seção 'Registros detalhados' com todas as linhas brutas de atendimento
-
-    Retorna o caminho do arquivo gerado.
-    Garante escrita atômica via arquivo .tmp e limpeza em caso de falha.
-    """
-    dados_norm = [
+def normalizar_linhas_export(dados: list[tuple]) -> list[tuple]:
+    """Normaliza as linhas brutas de 7 colunas para exportação local (CSV) e nuvem (Google Sheets)."""
+    return [
         (
             data,
             entrada,
@@ -737,6 +741,20 @@ def gerar_relatorio_csv(dados: list[tuple], label: str, titulo: str) -> str:
         )
         for data, entrada, saida, nome, mat, maquina, bolsista in dados
     ]
+
+
+def gerar_relatorio_csv(dados: list[tuple], label: str, titulo: str) -> str:
+    """Gera o arquivo CSV canônico de relatório do laboratório.
+
+    Contém:
+      1. Cabeçalho com métricas gerais do laboratório
+      2. Resumo individual por pessoa em blocos de 10 (paginados em grupos de até 50)
+      3. Seção 'Registros detalhados' com todas as linhas brutas de atendimento
+
+    Retorna o caminho do arquivo gerado.
+    Garante escrita atômica via arquivo .tmp e limpeza em caso de falha.
+    """
+    dados_norm = normalizar_linhas_export(dados)
 
     stats = calcular_estatisticas(dados_norm)
     nome_arquivo = f"lab_{label}.csv"
@@ -852,6 +870,157 @@ def finalizar_export_silencioso(mes: str, dados: list, config: dict) -> str | No
 
 
 # ─────────────────────────────────────────────
+# SERVIÇO: INTEGRAÇÃO GOOGLE SHEETS
+# ─────────────────────────────────────────────
+
+def sheets_configurado(config: dict) -> bool:
+    """Retorna True se URL HTTPS e Token do Google Sheets estiverem preenchidos."""
+    if not isinstance(config, dict):
+        return False
+    url = str(config.get("sheets_webhook_url") or "").strip()
+    token = str(config.get("sheets_webhook_token") or "").strip()
+    return bool(url.startswith("https://") and token)
+
+
+def formatar_mes_aba_sheets(mes: str) -> str:
+    """Converte mês ('MM/YYYY' ou 'YYYY-MM') para o formato por extenso 'Mês Ano' (ex: 'Outubro 2026')."""
+    if not mes or not isinstance(mes, str):
+        raise ValueError(f"Mês inválido para aba do Sheets: {mes!r}")
+    s = mes.strip()
+    if "/" in s:
+        partes = s.split("/")
+        if (
+            len(partes) == 2
+            and partes[0].isdigit()
+            and partes[1].isdigit()
+            and 1 <= int(partes[0]) <= 12
+            and len(partes[1]) == 4
+        ):
+            m_key = f"{int(partes[0]):02d}"
+            return f"{NOMES_MESES[m_key]} {partes[1]}"
+    if "-" in s:
+        partes = s.split("-")
+        if (
+            len(partes) == 2
+            and partes[0].isdigit()
+            and partes[1].isdigit()
+            and len(partes[0]) == 4
+            and 1 <= int(partes[1]) <= 12
+        ):
+            m_key = f"{int(partes[1]):02d}"
+            return f"{NOMES_MESES[m_key]} {partes[0]}"
+    partes_espaco = s.split()
+    if len(partes_espaco) == 2 and partes_espaco[1].isdigit() and len(partes_espaco[1]) == 4:
+        for m_nome in NOMES_MESES.values():
+            if partes_espaco[0].lower() == m_nome.lower():
+                return f"{m_nome} {partes_espaco[1]}"
+    raise ValueError(f"Formato de mês inválido (esperado MM/YYYY ou 'Mês Ano'): {mes!r}")
+
+
+def salvar_credenciais_sheets(config: dict, url: str, token: str) -> None:
+    """Persiste atomicamente a URL e o Token do Google Sheets em config.json."""
+    url_clean = (url or "").strip()
+    token_clean = (token or "").strip()
+    try:
+        fresh_cfg = load_config()
+    except Exception:
+        fresh_cfg = copy.deepcopy(config) if isinstance(config, dict) else copy.deepcopy(DEFAULT_CONFIG)
+    fresh_cfg["sheets_webhook_url"] = url_clean
+    fresh_cfg["sheets_webhook_token"] = token_clean
+    save_config(fresh_cfg)
+    if isinstance(config, dict):
+        config.update(fresh_cfg)
+
+
+def registrar_sucesso_sync_sheets(mes: str, config: dict, marcar_mes: bool = True) -> bool:
+    """Registra na main thread a conclusão com sucesso do envio ao Google Sheets.
+
+    1. Recarrega fresh_cfg = load_config() do disco (preservando edições concorrentes).
+    2. Adiciona mes ('MM/YYYY') em fresh_cfg['sheets_synced_months'] somente se
+       marcar_mes=True e mes != mes_atual.
+    3. Atualiza config.update(fresh_cfg) in-place.
+    4. Persiste atomicamente via save_config(fresh_cfg).
+
+    Retorna True se o mês foi marcado em sheets_synced_months, False caso contrário.
+    """
+    mes_clean = (mes or "").strip()
+    mes_atual = agora().strftime("%m/%Y")
+    deve_marcar = bool(marcar_mes and mes_clean and mes_clean != mes_atual)
+
+    try:
+        fresh_cfg = load_config()
+    except Exception:
+        fresh_cfg = copy.deepcopy(config) if isinstance(config, dict) else copy.deepcopy(DEFAULT_CONFIG)
+
+    synced = fresh_cfg.setdefault("sheets_synced_months", [])
+    if not isinstance(synced, list):
+        synced = []
+        fresh_cfg["sheets_synced_months"] = synced
+
+    marcado = False
+    if deve_marcar:
+        if mes_clean not in synced:
+            synced.append(mes_clean)
+        try:
+            save_config(fresh_cfg)
+            marcado = True
+        except Exception as e:
+            log.error("Falha ao salvar config após sincronizar Sheets (%s): %s", mes_clean, e)
+            if mes_clean in synced:
+                synced.remove(mes_clean)
+            return False
+
+    if isinstance(config, dict):
+        config.update(fresh_cfg)
+    return marcado
+
+
+def disparar_sync_sheets_async(
+    mes: str,
+    dados: list[tuple],
+    config: dict,
+    *,
+    marcar_mes: bool = True,
+    timeout: int = 10,
+    opener=None,
+):
+    """Prepara a matriz normalizada de 7 colunas e dispara o worker assíncrono do Sheets."""
+    from core.sheets import montar_matriz_sheets, iniciar_sync_sheets_async
+
+    url = str(config.get("sheets_webhook_url") or "").strip()
+    token = str(config.get("sheets_webhook_token") or "").strip()
+    mes_aba = formatar_mes_aba_sheets(mes)
+    dados_norm = normalizar_linhas_export(dados)
+    rows = montar_matriz_sheets(dados_norm)
+    return iniciar_sync_sheets_async(
+        webhook_url=url,
+        token=token,
+        mes_aba=mes_aba,
+        rows=rows,
+        mes_ref=mes,
+        marcar_mes=marcar_mes,
+        timeout=timeout,
+        opener=opener,
+    )
+
+
+def verificar_pendencia_sheets_mes_anterior(config: dict) -> dict | None:
+    """Verifica se o mês anterior está pendente de sincronização com o Google Sheets
+    (para retentativa de contingência acoplada aos slots de backup de 12h e 17h).
+    """
+    if not sheets_configurado(config):
+        return None
+    mes_ant = mes_anterior()
+    if mes_ant in config.get("sheets_synced_months", []):
+        return None
+    db = _get_db()
+    dados = db.buscar_export_mes(mes_ant)
+    if not dados:
+        return None
+    return {"mes": mes_ant, "dados": dados}
+
+
+# ─────────────────────────────────────────────
 # SERVIÇO: ATUALIZAÇÃO OTA (GITHUB RELEASES)
 # ─────────────────────────────────────────────
 
@@ -863,16 +1032,19 @@ OTA_DIRS_EXTS = {
     "ui": (".py",),
     "layouts": (".json",),
     "hardware": (".py",),
+    "scripts": (".gs",),
 }
 OTA_REQUIRED_FILES = (
     "app.py",
     "core/config.py",
     "core/database.py",
     "core/services.py",
+    "core/sheets.py",
     "ui/app_window.py",
     "ui/kiosk.py",
     "ui/dialogs.py",
     "layouts/lab_informatica.json",
+    "scripts/sheets_webhook.gs",
 )
 OTA_PROTECTED_NAMES = {
     "lab.db",

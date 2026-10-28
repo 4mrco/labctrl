@@ -32,7 +32,8 @@ from core.services import (
     processar_entrada_com_despejo, registrar_defeito_maquina,
     resolver_defeito_maquina, reverter_acao, save_config,
     validar_entrada_nome, verificar_alerta_turno, verificar_e_executar_backups,
-    encerrar_ativos_fechamento,
+    encerrar_ativos_fechamento, disparar_sync_sheets_async,
+    registrar_sucesso_sync_sheets, verificar_pendencia_sheets_mes_anterior,
 )
 from ui.dialogs import (
     popup_sem_matricula, abrir_form_edicao, mostrar_toast,
@@ -189,6 +190,8 @@ class KioskFrame(tk.Frame):
         self._awaiting_ready_ts = 0.0                     # 0 = dim (repouso) … 1 = cor plena
         self._map_job = None
         self._orphan_warn_job = None
+        self._sheets_poll_job = None
+        self._sheets_queue = None
         self._slot_h = 0
         self._slot_job = None
         self._turno_blink_on = False
@@ -524,9 +527,43 @@ class KioskFrame(tk.Frame):
             novos_backups = verificar_e_executar_backups(self.config)
             for slot_key in novos_backups:
                 mostrar_toast(self.winfo_toplevel(), f"Backup das {slot_key}h realizado!")
+            if novos_backups:
+                self._verificar_contingencia_sheets()
         self._clock_initial_tick = False
 
         self._clock_job = self.after(1000, self._tick_clock)
+
+    def _verificar_contingencia_sheets(self):
+        if self._sheets_poll_job is not None:
+            return
+        pend = verificar_pendencia_sheets_mes_anterior(self.config)
+        if not pend:
+            return
+        try:
+            self._sheets_queue = disparar_sync_sheets_async(
+                pend["mes"], pend["dados"], self.config, marcar_mes=True
+            )
+            self._sheets_poll_job = self.after(200, self._poll_sheets_sync)
+        except Exception:
+            self._sheets_queue = None
+            self._sheets_poll_job = None
+
+    def _poll_sheets_sync(self):
+        import queue
+        if self._sheets_queue is None:
+            self._sheets_poll_job = None
+            return
+        try:
+            res = self._sheets_queue.get_nowait()
+        except queue.Empty:
+            self._sheets_poll_job = self.after(200, self._poll_sheets_sync)
+            return
+        self._sheets_poll_job = None
+        self._sheets_queue = None
+        if res.get("ok"):
+            registrar_sucesso_sync_sheets(
+                res.get("mes", ""), self.config, marcar_mes=bool(res.get("marcar_mes", True))
+            )
 
     # ── Feedback ──────────────────────────────────────────────────────────
 
@@ -1670,7 +1707,7 @@ class KioskFrame(tk.Frame):
     def destroy(self):
         for name in ("_clock_job", "_deadline_job", "_flash_job", "_refresh_job",
                      "_toast_job", "_map_job", "_slot_job", "_focus_job", "_undo_job",
-                     "_orphan_warn_job"):
+                     "_orphan_warn_job", "_sheets_poll_job"):
             job = getattr(self, name, None)
             if job:
                 try:
@@ -1678,6 +1715,7 @@ class KioskFrame(tk.Frame):
                 except (tk.TclError, ValueError):
                     pass
                 setattr(self, name, None)
+        self._sheets_queue = None
         for job in getattr(self, "_init_focus_jobs", []):
             try:
                 self.after_cancel(job)
