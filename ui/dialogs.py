@@ -209,7 +209,7 @@ def mostrar_sobre(parent: tk.Tk | tk.Toplevel):
         "Este sistema encontra-se em desenvolvimento contínuo. Caso futuramente receba novas "
         "funcionalidades, correções ou passe a ser mantido por outras pessoas, preservar estas informações e registrar os novos responsáveis pela manutenção.\n\n"
         "Autor: Marco (@4mrco)\n"
-        "Contato: marco.aurelio@alu.ufc.br"
+        "Reportar problemas: github.com/4mrco/labctrl/issues"
     )
     text_widget = tk.Text(frame_sobre, wrap="word", bg=bg, fg=fg, relief="flat",
                           highlightthickness=0, font=(None, 9), padx=5, pady=5, bd=0, height=8)
