@@ -1692,7 +1692,8 @@ class App:
                 mostrar_toast(self.root, "Erro na exportação automática.")
             return
 
-        if marcar_mes and marcar_mes not in self.config.get("exported_months", []):
+        mes_atual = agora().strftime("%m/%Y")
+        if marcar_mes and marcar_mes != mes_atual and marcar_mes not in self.config.get("exported_months", []):
             self.config.setdefault("exported_months", []).append(marcar_mes)
             try:
                 save_config(self.config)
@@ -1757,7 +1758,8 @@ class App:
             dados = buscar_export_mes(mes_str)
             label = mes_str.replace("/", "_")
             titulo = f"Mês {mes_str}"
-            marcar_mes = mes_str
+            mes_atual = agora().strftime("%m/%Y")
+            marcar_mes = mes_str if mes_str != mes_atual else None
         else:
             return
 
