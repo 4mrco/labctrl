@@ -715,7 +715,7 @@ def dialog_reinicio_obrigatorio_ota(parent: tk.Tk | tk.Toplevel, versao_nova: st
     win.wait_window()
 
 
-def executar_fluxo_ota_ui(parent: tk.Tk | tk.Toplevel, info_ota: dict, config: dict) -> None:
+def executar_fluxo_ota_ui(parent: tk.Tk | tk.Toplevel, info_ota: dict, config: dict | None = None) -> None:
     """Exibe progresso do download/aplicação OTA em thread separada e abre tela de reinício."""
     t = TEMAS["default"]
     bg, fg = t["bg"], t["fg"]

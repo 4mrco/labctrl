@@ -187,7 +187,7 @@ class AppController:
         if not self.ota_info or not self.ota_info.get("disponivel"):
             return
         from ui.dialogs import executar_fluxo_ota_ui
-        executar_fluxo_ota_ui(self.root, self.ota_info)
+        executar_fluxo_ota_ui(self.root, self.ota_info, self.config)
 
     def _on_ota_result(self, info_ota):
         if not info_ota or not info_ota.get("disponivel"):

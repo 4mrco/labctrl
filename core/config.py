@@ -6,7 +6,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_FILE    = os.path.join(BASE_DIR, "config.json")
 DB_FILE        = os.path.join(BASE_DIR, "lab.db")
 SCHEMA_VERSION = 3
-VERSAO_ATUAL   = "1.5.0"
+VERSAO_ATUAL   = "1.5.1"
 EXPORT_DIR     = os.path.join(BASE_DIR, "exports")
 
 
