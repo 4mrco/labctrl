@@ -202,25 +202,90 @@ def restaurar_registro_db(campos: dict) -> None:
         )
 
 
+def _parse_data_calendario(valor: str) -> date | None:
+    """Interpreta string D/M/YYYY ou DD/MM/YYYY válida no calendário (ano de 4 dígitos)."""
+    if not valor or not isinstance(valor, str):
+        return None
+    s = valor.strip()
+    partes = s.split("/")
+    if len(partes) != 3:
+        return None
+    d_str, m_str, y_str = partes
+    if not (1 <= len(d_str) <= 2 and d_str.isdigit()):
+        return None
+    if not (1 <= len(m_str) <= 2 and m_str.isdigit()):
+        return None
+    if not (len(y_str) == 4 and y_str.isdigit() and y_str[0] != "0"):
+        return None
+    try:
+        return date(int(y_str), int(m_str), int(d_str))
+    except ValueError:
+        return None
+
+
+def _parse_mes_ano_param(mes: str) -> tuple[int, int] | None:
+    """Interpreta parâmetro mensal 'MM/YYYY' ou 'M/YYYY' retornando (ano, mes)."""
+    if not mes or not isinstance(mes, str):
+        return None
+    partes = mes.strip().split("/")
+    if len(partes) != 2:
+        return None
+    m_str, y_str = partes
+    if not (1 <= len(m_str) <= 2 and m_str.isdigit()):
+        return None
+    if not (len(y_str) == 4 and y_str.isdigit() and y_str[0] != "0"):
+        return None
+    m_int, y_int = int(m_str), int(y_str)
+    if not (1 <= m_int <= 12):
+        return None
+    return (y_int, m_int)
+
+
 @safe_query([])
 def buscar_registros_por_mes(mes: str) -> list[tuple]:
+    ym = _parse_mes_ano_param(mes)
+    if ym is None:
+        return []
+    yyyy, mm = ym
+    p_pad = f"%/{mm:02d}/{yyyy:04d}"
+    p_raw = f"%/{mm}/{yyyy:04d}"
     with get_conn() as conn:
-        return conn.execute(
+        rows = conn.execute(
             """SELECT id,nome,matricula,data,entrada,saida,maquina,bolsista,status
-               FROM registros WHERE data LIKE ? ORDER BY id DESC""",
-            (f"%/{mes}",),
+               FROM registros WHERE data LIKE ? OR data LIKE ? ORDER BY id DESC""",
+            (p_pad, p_raw),
         ).fetchall()
+    resultado = []
+    for r in rows:
+        dt = _parse_data_calendario(r[3])
+        if dt is not None and dt.year == yyyy and dt.month == mm:
+            resultado.append(r)
+    return resultado
 
 
 @safe_query([])
-def buscar_registros_orfaos() -> list[tuple]:
-    hoje = datetime.now().strftime("%d/%m/%Y")
+def buscar_registros_orfaos(data_ref: str | date | datetime | None = None) -> list[tuple]:
+    if isinstance(data_ref, datetime):
+        ref_dt = data_ref.date()
+    elif isinstance(data_ref, date):
+        ref_dt = data_ref
+    elif isinstance(data_ref, str):
+        ref_dt = _parse_data_calendario(data_ref) or datetime.now().date()
+    else:
+        ref_dt = datetime.now().date()
+
     with get_conn() as conn:
-        return conn.execute(
+        rows = conn.execute(
             """SELECT id, nome, matricula, data, entrada FROM registros
-               WHERE status='ATIVO' AND data != ?""",
-            (hoje,),
+               WHERE status='ATIVO'"""
         ).fetchall()
+
+    orfaos = []
+    for r in rows:
+        dt = _parse_data_calendario(r[3])
+        if dt is not None and dt < ref_dt:
+            orfaos.append(r)
+    return orfaos
 
 
 @safe_query(0)
@@ -267,14 +332,24 @@ def buscar_ultimo_registro() -> tuple | None:
 
 
 @safe_query([])
-def buscar_meses() -> list[str]:
+def buscar_meses_com_registros() -> list[tuple[int, int]]:
+    """Retorna lista de tuplas (ano, mes) decrescente dos meses que possuem registros com data válida."""
     with get_conn() as conn:
         datas = [r[0] for r in conn.execute(
             "SELECT DISTINCT data FROM registros"
         ).fetchall()]
-    meses = sorted(set(d[3:] for d in datas),
-                   key=lambda m: (m[3:], m[:2]),
-                   reverse=True)
+    ym_set: set[tuple[int, int]] = set()
+    for d in datas:
+        dt = _parse_data_calendario(d)
+        if dt is not None:
+            ym_set.add((dt.year, dt.month))
+    return sorted(ym_set, reverse=True)
+
+
+@safe_query([])
+def buscar_meses() -> list[str]:
+    ym_list = buscar_meses_com_registros()
+    meses = [f"{mm:02d}/{yyyy:04d}" for yyyy, mm in ym_list]
     return meses or [datetime.now().strftime("%m/%Y")]
 
 
@@ -282,12 +357,25 @@ def buscar_meses() -> list[str]:
 
 @safe_query([])
 def buscar_export_mes(mes: str) -> list[tuple]:
+    ym = _parse_mes_ano_param(mes)
+    if ym is None:
+        return []
+    yyyy, mm = ym
+    p_pad = f"%/{mm:02d}/{yyyy:04d}"
+    p_raw = f"%/{mm}/{yyyy:04d}"
     with get_conn() as conn:
-        return conn.execute(
-            """SELECT data,entrada,saida,nome,matricula,maquina,bolsista
-               FROM registros WHERE data LIKE ? ORDER BY data, entrada""",
-            (f"%/{mes}",),
+        rows = conn.execute(
+            """SELECT id, data, entrada, saida, nome, matricula, maquina, bolsista
+               FROM registros WHERE data LIKE ? OR data LIKE ?""",
+            (p_pad, p_raw),
         ).fetchall()
+    validos = []
+    for rid, data, entrada, saida, nome, matricula, maquina, bolsista in rows:
+        dt = _parse_data_calendario(data)
+        if dt is not None and dt.year == yyyy and dt.month == mm:
+            validos.append((dt, entrada or "", rid, dt.strftime("%d/%m/%Y"), entrada, saida, nome, matricula, maquina, bolsista))
+    validos.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [item[3:] for item in validos]
 
 
 @safe_query([])

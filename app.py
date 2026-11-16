@@ -2,6 +2,7 @@ import argparse
 import tkinter as tk
 from core.database import init_db
 from core.services import (
+    configurar_logging,
     load_config,
     save_config,
     run_boot_operations,
@@ -10,6 +11,10 @@ from core.services import (
     disparar_sync_sheets_async,
     registrar_sucesso_sync_sheets,
     formatar_mes_aba_sheets,
+    iniciar_ciclo_recuperacao_sheets,
+    processar_fila_sheets,
+    tem_sync_sheets_ativo,
+    destino_sheets_vigente,
 )
 
 class AppController:
@@ -94,39 +99,59 @@ class AppController:
         self.boot_results = run_boot_operations(self.config)
         if self.boot_results.get("export"):
             finalizar_export_silencioso(self.boot_results["export"]["mes"], self.boot_results["export"]["dados"], self.config)
-        if self.boot_results.get("sheets_pending"):
-            pend = self.boot_results["sheets_pending"]
-            self._sheets_boot_queue = disparar_sync_sheets_async(pend["mes"], pend["dados"], self.config)
-            self._sheets_boot_job = self.root.after(200, self._poll_boot_sheets_sync)
+        if self.boot_results.get("sheets_pending") or self.boot_results.get("sheets_pending_months"):
+            if iniciar_ciclo_recuperacao_sheets(self.config):
+                self._sheets_boot_job = self.root.after(200, self._poll_boot_sheets_sync)
         self.boot_completed = True
         self._schedule_post_boot_tasks()
 
     def _poll_boot_sheets_sync(self):
         self._sheets_boot_job = None
-        if not self._sheets_boot_queue:
-            return
-        import queue
-        try:
-            res = self._sheets_boot_queue.get_nowait()
-        except queue.Empty:
+        resultados = processar_fila_sheets(self.config)
+
+        if not resultados and self._sheets_boot_queue is not None:
+            import queue
+            try:
+                res = self._sheets_boot_queue.get_nowait()
+                self._sheets_boot_queue = None
+                vigente = destino_sheets_vigente(res, self.config)
+                marcado = False
+                if vigente and res.get("ok"):
+                    marcado = registrar_sucesso_sync_sheets(
+                        res.get("mes", ""),
+                        self.config,
+                        marcar_mes=bool(res.get("marcar_mes", True)),
+                        destino_id=res.get("destino_id"),
+                        webhook_url=res.get("webhook_url"),
+                    )
+                res["vigente"] = vigente
+                res["marcado"] = marcado
+                resultados = [res]
+            except queue.Empty:
+                self._sheets_boot_job = self.root.after(200, self._poll_boot_sheets_sync)
+                return
+
+        for res in resultados:
+            if not res.get("vigente", True) or not destino_sheets_vigente(res, self.config):
+                continue
+            mes = res.get("mes", "")
+            if isinstance(self.boot_results, dict):
+                self.boot_results["sheets_sync"] = res
+                self.boot_results.setdefault("sheets_sync_list", []).append(res)
+            elif self.mode == "dashboard":
+                if self.current_app and hasattr(self.current_app, "_apresentar_resultado_sheets"):
+                    self.current_app._apresentar_resultado_sheets(res)
+                else:
+                    from ui.dialogs import mostrar_toast
+                    aba = res.get("mes_aba") or formatar_mes_aba_sheets(mes)
+                    if res.get("ok"):
+                        mostrar_toast(self.root, f"Google Sheets sincronizado ({aba})")
+                    else:
+                        err = res.get("error") or "Erro de conexão"
+                        mostrar_toast(self.root, f"Falha ao sincronizar Google Sheets ({err})")
+
+        if tem_sync_sheets_ativo() or self._sheets_boot_queue is not None:
             self._sheets_boot_job = self.root.after(200, self._poll_boot_sheets_sync)
-            return
-
-        self._sheets_boot_queue = None
-        mes = res.get("mes", "")
-        if res.get("ok"):
-            registrar_sucesso_sync_sheets(mes, self.config, marcar_mes=True)
-
-        if isinstance(self.boot_results, dict):
-            self.boot_results["sheets_sync"] = res
-        elif self.mode == "dashboard":
-            from ui.dialogs import mostrar_toast
-            aba = res.get("mes_aba") or formatar_mes_aba_sheets(mes)
-            if res.get("ok"):
-                mostrar_toast(self.root, f"Google Sheets sincronizado ({aba})")
-            else:
-                err = res.get("error") or "Erro de conexão"
-                mostrar_toast(self.root, f"Falha ao sincronizar Google Sheets ({err})")
         
     def setup_dashboard(self):
         from core.config import TEMAS
@@ -218,18 +243,33 @@ class AppController:
         if res.get("relogio"):
             mostrar_toast(self.root, "Atenção: Relógio parece atrasado (verificado no Kiosk)")
 
-        if res.get("sheets_sync"):
+        if res.get("sheets_sync_list"):
+            for s_res in res["sheets_sync_list"]:
+                if not s_res.get("vigente", True) or not destino_sheets_vigente(s_res, self.config):
+                    continue
+                if self.current_app and hasattr(self.current_app, "_apresentar_resultado_sheets"):
+                    self.current_app._apresentar_resultado_sheets(s_res)
+                else:
+                    aba = s_res.get("mes_aba") or formatar_mes_aba_sheets(s_res.get("mes", ""))
+                    if s_res.get("ok"):
+                        mostrar_toast(self.root, f"Google Sheets sincronizado ({aba})")
+                    else:
+                        err = s_res.get("error") or "Erro de conexão"
+                        mostrar_toast(self.root, f"Falha ao sincronizar Google Sheets ({err})")
+        elif res.get("sheets_sync"):
             s_res = res["sheets_sync"]
-            aba = s_res.get("mes_aba") or formatar_mes_aba_sheets(s_res.get("mes", ""))
-            if s_res.get("ok"):
-                mostrar_toast(self.root, f"Google Sheets sincronizado ({aba})")
-            else:
-                err = s_res.get("error") or "Erro de conexão"
-                mostrar_toast(self.root, f"Falha ao sincronizar Google Sheets ({err})")
+            if s_res.get("vigente", True) and destino_sheets_vigente(s_res, self.config):
+                aba = s_res.get("mes_aba") or formatar_mes_aba_sheets(s_res.get("mes", ""))
+                if s_res.get("ok"):
+                    mostrar_toast(self.root, f"Google Sheets sincronizado ({aba})")
+                else:
+                    err = s_res.get("error") or "Erro de conexão"
+                    mostrar_toast(self.root, f"Falha ao sincronizar Google Sheets ({err})")
             
         self.boot_results = None
 
 def main():
+    configurar_logging()
     init_db()
     parser = argparse.ArgumentParser(description="LabCTRL")
     parser.add_argument("--mode", choices=["kiosk", "dashboard"], help="UI mode to start")

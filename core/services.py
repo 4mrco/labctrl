@@ -12,12 +12,43 @@ import threading
 import urllib.request
 import urllib.error
 import zipfile
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import date, datetime, timedelta
 
-from core.config import CONFIG_FILE, EXPORT_DIR, DB_FILE, BASE_DIR, VERSAO_ATUAL, NOMES_MESES
+from core.config import CONFIG_FILE, EXPORT_DIR, DB_FILE, LOG_FILE, BASE_DIR, VERSAO_ATUAL, NOMES_MESES
 
 log = logging.getLogger(__name__)
+
+
+def configurar_logging(log_path: str | None = None) -> str:
+    """Configura de forma idempotente o FileHandler global para lab.log no diretório da instalação."""
+    target_path = os.path.abspath(log_path or LOG_FILE)
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.ERROR)
+
+    for h in list(root_logger.handlers):
+        if isinstance(h, logging.FileHandler):
+            h_path = os.path.abspath(getattr(h, "baseFilename", ""))
+            if h_path == target_path:
+                if os.path.exists(target_path):
+                    return target_path
+                try:
+                    h.close()
+                except Exception:
+                    pass
+                root_logger.removeHandler(h)
+
+    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+    handler = logging.FileHandler(target_path, mode="a", encoding="utf-8", delay=False)
+    handler.setLevel(logging.ERROR)
+    handler.setFormatter(
+        logging.Formatter(
+            fmt="%(asctime)s [%(levelname)s] %(message)s",
+            datefmt="%d/%m/%Y %H:%M:%S",
+        )
+    )
+    root_logger.addHandler(handler)
+    return target_path
 
 
 # ─────────────────────────────────────────────
@@ -132,6 +163,53 @@ def get_month_export_dir(mes: str | None = None) -> str:
     return month_dir
 
 
+_DATA_BR_RE = re.compile(r"^(\d{1,2})/(\d{1,2})/([1-9]\d{3})$")
+_MES_ANO_RE = re.compile(r"^(\d{1,2})/([1-9]\d{3})$")
+
+
+def parse_data_br(valor: str) -> date | None:
+    """Interpreta string D/M/YYYY ou DD/MM/YYYY válida no calendário (ano de 4 dígitos)."""
+    if not valor or not isinstance(valor, str):
+        return None
+    s = valor.strip()
+    m = _DATA_BR_RE.fullmatch(s)
+    if not m:
+        return None
+    try:
+        return date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+    except ValueError:
+        return None
+
+
+def normalizar_data_br(valor: str) -> str:
+    """Valida e retorna a data no formato canônico DD/MM/YYYY ou lança ValueError."""
+    dt = parse_data_br(valor)
+    if dt is None:
+        raise ValueError(f"Data inválida (esperado DD/MM/AAAA): {valor!r}")
+    return dt.strftime("%d/%m/%Y")
+
+
+def parse_mes_ano(mes: str) -> tuple[int, int] | None:
+    """Interpreta 'MM/YYYY' ou 'M/YYYY' retornando (ano, mes)."""
+    if not mes or not isinstance(mes, str):
+        return None
+    m = _MES_ANO_RE.fullmatch(mes.strip())
+    if not m:
+        return None
+    mm, yyyy = int(m.group(1)), int(m.group(2))
+    if not (1 <= mm <= 12):
+        return None
+    return (yyyy, mm)
+
+
+def normalizar_mes_ano(mes: str) -> str:
+    """Valida e retorna o mês no formato canônico MM/YYYY ou lança ValueError."""
+    ym = parse_mes_ano(mes)
+    if ym is None:
+        raise ValueError(f"Mês inválido (esperado MM/YYYY): {mes!r}")
+    return f"{ym[1]:02d}/{ym[0]:04d}"
+
+
 def agora() -> datetime:
     return datetime.now()
 
@@ -139,9 +217,10 @@ def agora() -> datetime:
 def calcular_tempo(entrada: str, saida: str, data: str) -> str:
     fmt = "%d/%m/%Y %H:%M"
     try:
+        d_norm = normalizar_data_br(data) if parse_data_br(str(data or "")) else data
         delta = (
-            datetime.strptime(f"{data} {saida}", fmt)
-            - datetime.strptime(f"{data} {entrada}", fmt)
+            datetime.strptime(f"{d_norm} {saida}", fmt)
+            - datetime.strptime(f"{d_norm} {entrada}", fmt)
         )
         m = int(delta.total_seconds() // 60)
         return f"{m // 60:02}:{m % 60:02}"
@@ -150,7 +229,7 @@ def calcular_tempo(entrada: str, saida: str, data: str) -> str:
 
 
 def mes_anterior() -> str:
-    hoje = date.today()
+    hoje = agora().date()
     if hoje.month == 1:
         return f"12/{hoje.year - 1}"
     return f"{hoje.month - 1:02}/{hoje.year}"
@@ -617,27 +696,133 @@ def remover_registro(rid: int) -> dict:
 
 
 # ─────────────────────────────────────────────
-# SERVIÇO: BOOT OPERATIONS
 # ─────────────────────────────────────────────
+# SERVIÇO: BOOT OPERATIONS & VIRADA DE DIA (6b)
+# ─────────────────────────────────────────────
+
+_ultima_data_observada: date | None = None
+
+
+def inicializar_data_observada(dt: date | datetime | None = None) -> date:
+    """Inicializa ou atualiza explicitamente a referência em memória da última data local observada."""
+    global _ultima_data_observada
+    if isinstance(dt, datetime):
+        ref = dt.date()
+    elif isinstance(dt, date):
+        ref = dt
+    else:
+        ref = agora().date()
+    _ultima_data_observada = ref
+    return ref
+
+
+def obter_ultima_data_observada() -> date | None:
+    """Retorna a última data local observada em memória."""
+    return _ultima_data_observada
+
+
+def encerrar_orfaos_anteriores(config: dict, data_ref: date | datetime | None = None) -> list[dict]:
+    """Encerra registros ATIVOS cuja data válida no calendário seja estritamente anterior a data_ref.
+
+    Grava saída desconhecida (NULL) com status FINALIZADO e adiciona matrículas afetadas
+    em config['orfaos_sem_saida'] sem duplicatas. Sessões sem matrícula também são encerradas
+    sem gerar aviso individual.
+    """
+    db = _get_db()
+    if isinstance(data_ref, datetime):
+        ref_dt = data_ref.date()
+    elif isinstance(data_ref, date):
+        ref_dt = data_ref
+    else:
+        ref_dt = agora().date()
+
+    orfaos = db.buscar_registros_orfaos(ref_dt)
+    if not orfaos:
+        return []
+
+    orfaos_sem_saida = config.setdefault("orfaos_sem_saida", [])
+    if not isinstance(orfaos_sem_saida, list):
+        orfaos_sem_saida = []
+        config["orfaos_sem_saida"] = orfaos_sem_saida
+
+    encerrados: list[dict] = []
+    for r in orfaos:
+        rid, nome = r[0], r[1]
+        matricula = r[2] if len(r) > 2 else ""
+        db.finalizar_registro(rid, None)
+        encerrados.append({"tipo": "saida", "rid": rid, "nome": nome, "matricula": matricula})
+        if matricula and matricula not in orfaos_sem_saida:
+            orfaos_sem_saida.append(matricula)
+
+    try:
+        fresh_cfg = load_config()
+    except Exception:
+        fresh_cfg = copy.deepcopy(config) if isinstance(config, dict) else copy.deepcopy(DEFAULT_CONFIG)
+    fresh_orfaos = fresh_cfg.get("orfaos_sem_saida", [])
+    if not isinstance(fresh_orfaos, list):
+        fresh_orfaos = []
+    for m in orfaos_sem_saida:
+        if m and m not in fresh_orfaos:
+            fresh_orfaos.append(m)
+    fresh_cfg["orfaos_sem_saida"] = fresh_orfaos
+    config["orfaos_sem_saida"] = list(fresh_orfaos)
+    save_config(fresh_cfg)
+    if isinstance(config, dict):
+        config.update(fresh_cfg)
+
+    return encerrados
+
+
+def verificar_virada_dia_orfaos(config: dict, now: datetime | date | None = None) -> list[dict]:
+    """Avalia a data local observada nos ticks de relógio (Dashboard e Totem).
+
+    - Se ainda não inicializada, define a referência sem encerrar sessões.
+    - Se a data observada for menor (ajuste de relógio para trás), atualiza a referência sem encerrar sessões.
+    - Se a data observada avançar, atualiza a referência e encerra sessões ativas com data válida < nova data.
+    """
+    global _ultima_data_observada
+    if isinstance(now, datetime):
+        hoje = now.date()
+    elif isinstance(now, date):
+        hoje = now
+    else:
+        hoje = agora().date()
+
+    if _ultima_data_observada is None:
+        _ultima_data_observada = hoje
+        return []
+
+    if hoje == _ultima_data_observada:
+        return []
+
+    if hoje < _ultima_data_observada:
+        _ultima_data_observada = hoje
+        return []
+
+    _ultima_data_observada = hoje
+    return encerrar_orfaos_anteriores(config, hoje)
+
 
 def run_boot_operations(config: dict) -> dict:
     """
     Executa as verificações de inicialização:
     - Backups pendentes
-    - Órfãos auto-encerrados
-    - Exportação do mês anterior
+    - Órfãos auto-encerrados (data válida < hoje)
+    - Exportação local CSV do mês anterior
+    - Descoberta de meses fechados pendentes para Google Sheets
     - Verificação de relógio (comparação com último registro)
     
     Retorna um dicionário de resultados. A UI decide como exibir.
     """
     db = _get_db()
     now = agora()
-    today_str = now.strftime("%Y-%m-%d")
+    inicializar_data_observada(now.date())
     results = {
         "backups": [],
         "orfaos": [],
         "export": None,
         "sheets_pending": None,
+        "sheets_pending_months": [],
         "relogio": None
     }
     
@@ -645,40 +830,39 @@ def run_boot_operations(config: dict) -> dict:
     results["backups"] = verificar_e_executar_backups(config)
     
     # 2. Órfãos
-    orfaos = db.buscar_registros_orfaos()
-    orfaos_sem_saida = config.setdefault("orfaos_sem_saida", [])
-    for r in orfaos:
-        rid, nome = r[0], r[1]
-        matricula = r[2] if len(r) > 2 else ""
-        db.finalizar_registro(rid, None)
-        results["orfaos"].append({"tipo": "saida", "rid": rid, "nome": nome, "matricula": matricula})
-        if matricula and matricula not in orfaos_sem_saida:
-            orfaos_sem_saida.append(matricula)
-    if orfaos:
-        config["orfaos_sem_saida"] = orfaos_sem_saida
-        save_config(config)
+    results["orfaos"] = encerrar_orfaos_anteriores(config, now.date())
         
-    # 3. Export Pendente (Local CSV e Google Sheets)
+    # 3A. Export Local Pendente (CSV - Mês Anterior)
     mes_ant = mes_anterior()
     precisa_csv = mes_ant not in config.get("exported_months", [])
-    precisa_sheets = (
-        sheets_configurado(config)
-        and mes_ant not in config.get("sheets_synced_months", [])
-    )
-    if precisa_csv or precisa_sheets:
-        dados = db.buscar_export_mes(mes_ant)
-        if dados:
-            if precisa_csv:
-                results["export"] = {"mes": mes_ant, "dados": dados}
-            if precisa_sheets:
-                results["sheets_pending"] = {"mes": mes_ant, "dados": dados}
+    if precisa_csv:
+        try:
+            dados_csv = db.buscar_export_mes(mes_ant)
+            if dados_csv:
+                results["export"] = {"mes": mes_ant, "dados": dados_csv}
+        except Exception as e:
+            log.error("Erro ao consultar export CSV de %s no boot: %s", mes_ant, e)
+
+    # 3B. Google Sheets — todos os meses fechados pendentes em ordem cronológica
+    if sheets_configurado(config):
+        pendentes = listar_meses_pendentes_sheets(config)
+        results["sheets_pending_months"] = pendentes
+        for m_pend in pendentes:
+            try:
+                dados_sh = db.buscar_export_mes(m_pend)
+                if dados_sh:
+                    results["sheets_pending"] = {"mes": m_pend, "dados": dados_sh}
+                    break
+            except Exception as e:
+                log.error("Erro ao ler dados do mês pendente %s no boot: %s", m_pend, e)
             
     # 4. Relógio
     reg = db.buscar_ultimo_registro()
     if reg:
         data_ant, entrada_ant = reg
         try:
-            dt_ant = datetime.strptime(f"{data_ant} {entrada_ant}", "%d/%m/%Y %H:%M")
+            d_norm = normalizar_data_br(str(data_ant))
+            dt_ant = datetime.strptime(f"{d_norm} {entrada_ant}", "%d/%m/%Y %H:%M")
             dt_novo = now.replace(second=0, microsecond=0)
             if dt_novo < dt_ant - timedelta(minutes=5):
                 results["relogio"] = {"dt_ant": dt_ant, "dt_novo": dt_novo}
@@ -729,18 +913,22 @@ def normalizar_matricula_export(m: str | None) -> str:
 
 def normalizar_linhas_export(dados: list[tuple]) -> list[tuple]:
     """Normaliza as linhas brutas de 7 colunas para exportação local (CSV) e nuvem (Google Sheets)."""
-    return [
-        (
-            data,
-            entrada,
-            saida,
-            nome,
-            normalizar_matricula_export(mat),
-            "ML" if str(maquina).startswith("ML-") else maquina,
-            bolsista,
+    linhas = []
+    for data, entrada, saida, nome, mat, maquina, bolsista in dados:
+        dt = parse_data_br(str(data or ""))
+        data_canon = dt.strftime("%d/%m/%Y") if dt is not None else data
+        linhas.append(
+            (
+                data_canon,
+                entrada,
+                saida,
+                nome,
+                normalizar_matricula_export(mat),
+                "ML" if str(maquina).startswith("ML-") else maquina,
+                bolsista,
+            )
         )
-        for data, entrada, saida, nome, mat, maquina, bolsista in dados
-    ]
+    return linhas
 
 
 def gerar_relatorio_csv(dados: list[tuple], label: str, titulo: str) -> str:
@@ -873,6 +1061,87 @@ def finalizar_export_silencioso(mes: str, dados: list, config: dict) -> str | No
 # SERVIÇO: INTEGRAÇÃO GOOGLE SHEETS
 # ─────────────────────────────────────────────
 
+_sheets_dest_lock = threading.Lock()
+_sheets_dest_epoch: int = 0
+_sheets_last_known_url: str | None = None
+
+_SHEETS_ACTIVE_JOBS: list[dict] = []
+_SHEETS_COMPLETED_EVENTS: list[dict] = []
+_SHEETS_AUTO_CYCLE: dict = {
+    "destino_id": None,
+    "queue": deque(),
+    "attempted": set(),
+    "timeout": 10,
+    "opener": None,
+}
+
+
+def resetar_estado_sheets_runtime() -> None:
+    """Reseta estado em memória da fila e época de destino do Google Sheets (útil para testes)."""
+    global _sheets_dest_epoch, _sheets_last_known_url
+    with _sheets_dest_lock:
+        _sheets_dest_epoch = 0
+        _sheets_last_known_url = None
+        _SHEETS_ACTIVE_JOBS.clear()
+        _SHEETS_COMPLETED_EVENTS.clear()
+        _SHEETS_AUTO_CYCLE["destino_id"] = None
+        _SHEETS_AUTO_CYCLE["queue"].clear()
+        _SHEETS_AUTO_CYCLE["attempted"].clear()
+        _SHEETS_AUTO_CYCLE["timeout"] = 10
+        _SHEETS_AUTO_CYCLE["opener"] = None
+
+
+def obter_identidade_destino_sheets(config: dict | None = None) -> tuple[int, str]:
+    """Retorna a identidade em memória (epoch, url_limpa) do destino vigente do Google Sheets."""
+    global _sheets_dest_epoch, _sheets_last_known_url
+    if isinstance(config, dict):
+        url = str(config.get("sheets_webhook_url") or "").strip()
+    else:
+        try:
+            cfg = load_config()
+            url = str(cfg.get("sheets_webhook_url") or "").strip()
+        except Exception:
+            url = ""
+    with _sheets_dest_lock:
+        if _sheets_last_known_url is None:
+            _sheets_last_known_url = url
+        elif url != _sheets_last_known_url:
+            _sheets_dest_epoch += 1
+            _sheets_last_known_url = url
+            if _SHEETS_AUTO_CYCLE["destino_id"] != (_sheets_dest_epoch, url):
+                _SHEETS_AUTO_CYCLE["queue"].clear()
+        return (_sheets_dest_epoch, url)
+
+
+def destino_sheets_vigente(
+    res_ou_destino,
+    config: dict | None = None,
+) -> bool:
+    """Valida se o destino associado a um envio ainda corresponde ao destino ativo e configurado."""
+    try:
+        fresh_cfg = load_config()
+    except Exception:
+        fresh_cfg = config if isinstance(config, dict) else {}
+
+    if not sheets_configurado(fresh_cfg):
+        return False
+
+    dest_atual = obter_identidade_destino_sheets(fresh_cfg)
+    if isinstance(res_ou_destino, dict):
+        dest_id = res_ou_destino.get("destino_id")
+        w_url = res_ou_destino.get("webhook_url")
+        if dest_id is not None:
+            return dest_id == dest_atual
+        if w_url is not None:
+            return str(w_url).strip() == dest_atual[1]
+        return True
+    if isinstance(res_ou_destino, tuple) and len(res_ou_destino) == 2:
+        return res_ou_destino == dest_atual
+    if isinstance(res_ou_destino, str):
+        return res_ou_destino.strip() == dest_atual[1]
+    return True
+
+
 def sheets_configurado(config: dict) -> bool:
     """Retorna True se URL HTTPS e Token do Google Sheets estiverem preenchidos."""
     if not isinstance(config, dict):
@@ -918,39 +1187,97 @@ def formatar_mes_aba_sheets(mes: str) -> str:
 
 
 def salvar_credenciais_sheets(config: dict, url: str, token: str) -> None:
-    """Persiste atomicamente a URL e o Token do Google Sheets em config.json."""
+    """Persiste atomicamente a URL e o Token do Google Sheets em config.json.
+
+    - Se uma nova URL não vazia for informada (diferente da URL salva anteriormente,
+      inclusive quando antes estava vazia/desativada), limpa sheets_synced_months = []
+      na mesma escrita atômica de config.json e avança a identidade de destino em memória.
+    - Atualizar apenas o token da mesma URL ou desativar com campos vazios preserva
+      sheets_synced_months.
+    - Aplica a mudança em memória somente após o sucesso de save_config().
+    """
+    global _sheets_dest_epoch, _sheets_last_known_url
     url_clean = (url or "").strip()
     token_clean = (token or "").strip()
     try:
         fresh_cfg = load_config()
     except Exception:
         fresh_cfg = copy.deepcopy(config) if isinstance(config, dict) else copy.deepcopy(DEFAULT_CONFIG)
+
+    old_url = str(fresh_cfg.get("sheets_webhook_url") or "").strip()
+    if not old_url and isinstance(config, dict):
+        old_url = str(config.get("sheets_webhook_url") or "").strip()
+
+    with _sheets_dest_lock:
+        if _sheets_last_known_url is None:
+            _sheets_last_known_url = old_url
+
+    mudou_url = (url_clean != old_url)
+    novo_destino = bool(url_clean and mudou_url)
+
     fresh_cfg["sheets_webhook_url"] = url_clean
     fresh_cfg["sheets_webhook_token"] = token_clean
+    if novo_destino:
+        fresh_cfg["sheets_synced_months"] = []
+
     save_config(fresh_cfg)
+
+    with _sheets_dest_lock:
+        if mudou_url or url_clean != _sheets_last_known_url:
+            _sheets_dest_epoch += 1
+            _sheets_last_known_url = url_clean
+            _SHEETS_AUTO_CYCLE["destino_id"] = None
+            _SHEETS_AUTO_CYCLE["queue"].clear()
+            _SHEETS_AUTO_CYCLE["attempted"].clear()
+
     if isinstance(config, dict):
         config.update(fresh_cfg)
 
 
-def registrar_sucesso_sync_sheets(mes: str, config: dict, marcar_mes: bool = True) -> bool:
+def registrar_sucesso_sync_sheets(
+    mes: str,
+    config: dict,
+    marcar_mes: bool = True,
+    *,
+    destino_id=None,
+    webhook_url: str | None = None,
+) -> bool:
     """Registra na main thread a conclusão com sucesso do envio ao Google Sheets.
 
     1. Recarrega fresh_cfg = load_config() do disco (preservando edições concorrentes).
-    2. Adiciona mes ('MM/YYYY') em fresh_cfg['sheets_synced_months'] somente se
-       marcar_mes=True e mes != mes_atual.
-    3. Atualiza config.update(fresh_cfg) in-place.
-    4. Persiste atomicamente via save_config(fresh_cfg).
+    2. Valida se o destino do envio (destino_id / webhook_url) ainda é o destino vigente.
+    3. Adiciona mes ('MM/YYYY') em fresh_cfg['sheets_synced_months'] somente se
+       marcar_mes=True e o mês for estritamente anterior ao mês atual.
+    4. Persiste atomicamente via save_config(fresh_cfg) e atualiza config em memória.
 
     Retorna True se o mês foi marcado em sheets_synced_months, False caso contrário.
     """
-    mes_clean = (mes or "").strip()
-    mes_atual = agora().strftime("%m/%Y")
-    deve_marcar = bool(marcar_mes and mes_clean and mes_clean != mes_atual)
+    mes_raw = (mes or "").strip()
+    ym = parse_mes_ano(mes_raw)
+    mes_clean = f"{ym[1]:02d}/{ym[0]:04d}" if ym is not None else mes_raw
 
     try:
         fresh_cfg = load_config()
     except Exception:
         fresh_cfg = copy.deepcopy(config) if isinstance(config, dict) else copy.deepcopy(DEFAULT_CONFIG)
+
+    if destino_id is not None or webhook_url is not None:
+        if not sheets_configurado(fresh_cfg):
+            return False
+        dest_atual = obter_identidade_destino_sheets(fresh_cfg)
+        if destino_id is not None and destino_id != dest_atual:
+            return False
+        if webhook_url is not None and str(webhook_url).strip() != dest_atual[1]:
+            return False
+
+    now = agora()
+    ym_atual = (now.year, now.month)
+    if ym is not None:
+        eh_mes_fechado = (ym < ym_atual)
+    else:
+        eh_mes_fechado = bool(mes_clean and mes_clean != now.strftime("%m/%Y"))
+
+    deve_marcar = bool(marcar_mes and mes_clean and eh_mes_fechado)
 
     synced = fresh_cfg.setdefault("sheets_synced_months", [])
     if not isinstance(synced, list):
@@ -959,14 +1286,16 @@ def registrar_sucesso_sync_sheets(mes: str, config: dict, marcar_mes: bool = Tru
 
     marcado = False
     if deve_marcar:
+        adicionado_agora = False
         if mes_clean not in synced:
             synced.append(mes_clean)
+            adicionado_agora = True
         try:
             save_config(fresh_cfg)
             marcado = True
         except Exception as e:
             log.error("Falha ao salvar config após sincronizar Sheets (%s): %s", mes_clean, e)
-            if mes_clean in synced:
+            if adicionado_agora and mes_clean in synced:
                 synced.remove(mes_clean)
             return False
 
@@ -981,6 +1310,7 @@ def disparar_sync_sheets_async(
     config: dict,
     *,
     marcar_mes: bool = True,
+    destino_id=None,
     timeout: int = 10,
     opener=None,
 ):
@@ -989,7 +1319,11 @@ def disparar_sync_sheets_async(
 
     url = str(config.get("sheets_webhook_url") or "").strip()
     token = str(config.get("sheets_webhook_token") or "").strip()
-    mes_aba = formatar_mes_aba_sheets(mes)
+    if destino_id is None:
+        destino_id = obter_identidade_destino_sheets(config)
+    ym = parse_mes_ano(mes)
+    mes_canon = f"{ym[1]:02d}/{ym[0]:04d}" if ym is not None else (mes or "").strip()
+    mes_aba = formatar_mes_aba_sheets(mes_canon)
     dados_norm = normalizar_linhas_export(dados)
     rows = montar_matriz_sheets(dados_norm)
     return iniciar_sync_sheets_async(
@@ -997,27 +1331,330 @@ def disparar_sync_sheets_async(
         token=token,
         mes_aba=mes_aba,
         rows=rows,
-        mes_ref=mes,
+        mes_ref=mes_canon,
         marcar_mes=marcar_mes,
+        destino_id=destino_id,
         timeout=timeout,
         opener=opener,
     )
 
 
-def verificar_pendencia_sheets_mes_anterior(config: dict) -> dict | None:
-    """Verifica se o mês anterior está pendente de sincronização com o Google Sheets
-    (para retentativa de contingência acoplada aos slots de backup de 12h e 17h).
+def listar_meses_pendentes_sheets(config: dict, max_meses_atras: int = 2) -> list[str]:
+    """Retorna os meses fechados recentes (até max_meses_atras antes do mês atual) com
+    registros no banco e ausentes de config['sheets_synced_months'], em ordem cronológica.
+
+    Meses com mais de max_meses_atras de antiguidade ficam fora da sincronização automática
+    para evitar sobrescrever abas históricas da planilha oficial com dados legados/incompletos.
     """
     if not sheets_configurado(config):
-        return None
-    mes_ant = mes_anterior()
-    if mes_ant in config.get("sheets_synced_months", []):
+        return []
+    now = agora()
+    idx_atual = now.year * 12 + (now.month - 1)
+
+    synced_raw = config.get("sheets_synced_months", [])
+    synced_ym: set[tuple[int, int]] = set()
+    if isinstance(synced_raw, list):
+        for item in synced_raw:
+            ym = parse_mes_ano(str(item))
+            if ym is not None:
+                synced_ym.add(ym)
+
+    db = _get_db()
+    try:
+        ym_banco = db.buscar_meses_com_registros()
+    except Exception as e:
+        log.error("Erro ao consultar meses com registros para sincronização Sheets: %s", e)
+        return []
+
+    pendentes_ym = [
+        (yyyy, mm) for yyyy, mm in ym_banco
+        if 1 <= (idx_atual - (yyyy * 12 + (mm - 1))) <= max_meses_atras
+        and (yyyy, mm) not in synced_ym
+    ]
+    pendentes_ym.sort()
+    return [f"{mm:02d}/{yyyy:04d}" for yyyy, mm in pendentes_ym]
+
+
+def verificar_pendencia_sheets_mes_anterior(config: dict) -> dict | None:
+    """Retorna o primeiro mês fechado pendente de sincronização {'mes': 'MM/YYYY', 'dados': [...]}
+    em ordem cronológica, ou None se não houver pendências.
+    """
+    pendentes = listar_meses_pendentes_sheets(config)
+    if not pendentes:
         return None
     db = _get_db()
-    dados = db.buscar_export_mes(mes_ant)
-    if not dados:
-        return None
-    return {"mes": mes_ant, "dados": dados}
+    for mes in pendentes:
+        try:
+            dados = db.buscar_export_mes(mes)
+            if dados:
+                return {"mes": mes, "dados": dados}
+        except Exception as e:
+            log.error("Erro ao carregar dados do mês pendente %s: %s", mes, e)
+    return None
+
+
+def tem_sync_sheets_ativo() -> bool:
+    """Retorna True se houver workers assíncronos, eventos concluídos ou fila automática pendente."""
+    return bool(
+        _SHEETS_ACTIVE_JOBS
+        or _SHEETS_COMPLETED_EVENTS
+        or _SHEETS_AUTO_CYCLE["queue"]
+    )
+
+
+def enfileirar_envio_sheets(
+    mes: str,
+    dados: list[tuple],
+    config: dict,
+    *,
+    marcar_mes: bool = True,
+    manual: bool = False,
+    auto_cycle: bool = False,
+    timeout: int = 10,
+    opener=None,
+) -> bool:
+    """Enfileira um envio mensal para o destino vigente evitando envios concorrentes duplicados
+    para o mesmo mês e mesmo destino. Retorna True se um novo worker foi disparado.
+    """
+    if not sheets_configurado(config):
+        return False
+    ym = parse_mes_ano(mes)
+    mes_canon = f"{ym[1]:02d}/{ym[0]:04d}" if ym is not None else (mes or "").strip()
+    destino_id = obter_identidade_destino_sheets(config)
+
+    for job in _SHEETS_ACTIVE_JOBS:
+        if job["mes"] == mes_canon and job["destino_id"] == destino_id:
+            if manual:
+                job["manual"] = True
+            return False
+
+    q = disparar_sync_sheets_async(
+        mes_canon,
+        dados,
+        config,
+        marcar_mes=marcar_mes,
+        destino_id=destino_id,
+        timeout=timeout,
+        opener=opener,
+    )
+    _SHEETS_ACTIVE_JOBS.append(
+        {
+            "queue": q,
+            "mes": mes_canon,
+            "mes_aba": formatar_mes_aba_sheets(mes_canon),
+            "marcar_mes": bool(marcar_mes),
+            "manual": bool(manual),
+            "auto_cycle": bool(auto_cycle),
+            "destino_id": destino_id,
+            "webhook_url": destino_id[1],
+        }
+    )
+    return True
+
+
+def _avancar_ciclo_auto_sheets(config: dict) -> None:
+    """Dispara o próximo mês pendente da fila automática caso nenhum envio automático esteja em voo."""
+    dest_id = _SHEETS_AUTO_CYCLE.get("destino_id")
+    if dest_id is None:
+        return
+
+    if not sheets_configurado(config) or obter_identidade_destino_sheets(config) != dest_id:
+        _SHEETS_AUTO_CYCLE["queue"].clear()
+        return
+
+    for job in _SHEETS_ACTIVE_JOBS:
+        if job.get("auto_cycle") and job["destino_id"] == dest_id:
+            return
+
+    synced_raw = config.get("sheets_synced_months", [])
+    synced_canon = {
+        f"{ym[1]:02d}/{ym[0]:04d}"
+        for s in (synced_raw if isinstance(synced_raw, list) else [])
+        if (ym := parse_mes_ano(str(s))) is not None
+    }
+
+    db = _get_db()
+    while _SHEETS_AUTO_CYCLE["queue"]:
+        mes = _SHEETS_AUTO_CYCLE["queue"].popleft()
+        if mes in _SHEETS_AUTO_CYCLE["attempted"]:
+            continue
+        if mes in synced_canon:
+            continue
+        if any(j["mes"] == mes and j["destino_id"] == dest_id for j in _SHEETS_ACTIVE_JOBS):
+            _SHEETS_AUTO_CYCLE["attempted"].add(mes)
+            continue
+
+        _SHEETS_AUTO_CYCLE["attempted"].add(mes)
+        try:
+            with db.get_conn() as conn:
+                conn.execute("SELECT 1 FROM registros LIMIT 1").fetchone()
+            dados = db.buscar_export_mes(mes)
+        except Exception as e:
+            log.error("Erro ao ler banco de dados para o mês pendente %s: %s", mes, e)
+            _SHEETS_COMPLETED_EVENTS.append(
+                {
+                    "ok": False,
+                    "mes": mes,
+                    "mes_aba": formatar_mes_aba_sheets(mes),
+                    "error": "Erro ao ler banco de dados",
+                    "marcar_mes": True,
+                    "webhook_url": dest_id[1],
+                    "destino_id": dest_id,
+                    "vigente": True,
+                    "marcado": False,
+                    "manual": False,
+                    "auto_cycle": True,
+                }
+            )
+            continue
+
+        if not dados:
+            continue
+
+        try:
+            enfileirar_envio_sheets(
+                mes,
+                dados,
+                config,
+                marcar_mes=True,
+                manual=False,
+                auto_cycle=True,
+                timeout=_SHEETS_AUTO_CYCLE.get("timeout", 10),
+                opener=_SHEETS_AUTO_CYCLE.get("opener"),
+            )
+            return
+        except Exception as e:
+            log.error("Erro ao disparar sincronização automática do mês %s: %s", mes, e)
+            _SHEETS_COMPLETED_EVENTS.append(
+                {
+                    "ok": False,
+                    "mes": mes,
+                    "mes_aba": formatar_mes_aba_sheets(mes),
+                    "error": str(e) or "Erro ao iniciar sincronização",
+                    "marcar_mes": True,
+                    "webhook_url": dest_id[1],
+                    "destino_id": dest_id,
+                    "vigente": True,
+                    "marcado": False,
+                    "manual": False,
+                    "auto_cycle": True,
+                }
+            )
+            continue
+
+
+def iniciar_ciclo_recuperacao_sheets(
+    config: dict,
+    *,
+    timeout: int = 10,
+    opener=None,
+) -> bool:
+    """Inicia ou alimenta um ciclo de recuperação automática de meses fechados pendentes
+    em ordem cronológica (1 tentativa por mês por ciclo).
+    """
+    if not sheets_configurado(config):
+        return False
+
+    dest_id = obter_identidade_destino_sheets(config)
+    meses_pendentes = listar_meses_pendentes_sheets(config)
+    if not meses_pendentes:
+        return False
+
+    auto_em_voo = any(
+        j.get("auto_cycle") and j["destino_id"] == dest_id
+        for j in _SHEETS_ACTIVE_JOBS
+    )
+    ciclo_ativo = (
+        _SHEETS_AUTO_CYCLE["destino_id"] == dest_id
+        and (bool(_SHEETS_AUTO_CYCLE["queue"]) or auto_em_voo)
+    )
+
+    if not ciclo_ativo:
+        _SHEETS_AUTO_CYCLE["destino_id"] = dest_id
+        _SHEETS_AUTO_CYCLE["queue"] = deque(meses_pendentes)
+        _SHEETS_AUTO_CYCLE["attempted"] = set()
+        _SHEETS_AUTO_CYCLE["timeout"] = timeout
+        _SHEETS_AUTO_CYCLE["opener"] = opener
+    else:
+        _SHEETS_AUTO_CYCLE["timeout"] = timeout
+        if opener is not None:
+            _SHEETS_AUTO_CYCLE["opener"] = opener
+        for m in meses_pendentes:
+            if (
+                m not in _SHEETS_AUTO_CYCLE["attempted"]
+                and m not in _SHEETS_AUTO_CYCLE["queue"]
+                and not any(j["mes"] == m and j["destino_id"] == dest_id for j in _SHEETS_ACTIVE_JOBS)
+            ):
+                _SHEETS_AUTO_CYCLE["queue"].append(m)
+
+    _avancar_ciclo_auto_sheets(config)
+    return tem_sync_sheets_ativo()
+
+
+def processar_fila_sheets(config: dict) -> list[dict]:
+    """Drena na main thread as conclusões de envios em segundo plano, validando o destino vigente,
+    persistindo marcações individuais e avançando a fila cronológica automática.
+    """
+    import queue as _q
+
+    concluidos: list[dict] = []
+    if _SHEETS_COMPLETED_EVENTS:
+        concluidos.extend(_SHEETS_COMPLETED_EVENTS)
+        _SHEETS_COMPLETED_EVENTS.clear()
+
+    restantes: list[dict] = []
+    precisa_avancar_auto = False
+
+    for job in list(_SHEETS_ACTIVE_JOBS):
+        try:
+            res = job["queue"].get_nowait()
+        except _q.Empty:
+            restantes.append(job)
+            continue
+
+        vigente = destino_sheets_vigente(res, config)
+        marcado = False
+        persist_error = False
+
+        if vigente:
+            if res.get("ok"):
+                deve_marcar = bool(res.get("marcar_mes", True))
+                ym = parse_mes_ano(res.get("mes", ""))
+                now = agora()
+                eh_fechado = (ym < (now.year, now.month)) if ym else (res.get("mes") != now.strftime("%m/%Y"))
+                marcado = registrar_sucesso_sync_sheets(
+                    res.get("mes", ""),
+                    config,
+                    marcar_mes=deve_marcar,
+                    destino_id=res.get("destino_id"),
+                    webhook_url=res.get("webhook_url"),
+                )
+                if deve_marcar and eh_fechado and not marcado:
+                    persist_error = True
+                    res["ok"] = False
+                    res["error"] = "Falha ao salvar marcação no config.json"
+            if job.get("auto_cycle"):
+                precisa_avancar_auto = True
+        else:
+            if _SHEETS_AUTO_CYCLE.get("destino_id") == job.get("destino_id"):
+                _SHEETS_AUTO_CYCLE["queue"].clear()
+
+        res["vigente"] = vigente
+        res["marcado"] = marcado
+        res["persist_error"] = persist_error
+        res["manual"] = bool(job.get("manual", False))
+        res["auto_cycle"] = bool(job.get("auto_cycle", False))
+        concluidos.append(res)
+
+    _SHEETS_ACTIVE_JOBS[:] = restantes
+
+    if precisa_avancar_auto or (_SHEETS_AUTO_CYCLE["queue"] and not any(j.get("auto_cycle") for j in _SHEETS_ACTIVE_JOBS)):
+        _avancar_ciclo_auto_sheets(config)
+        if _SHEETS_COMPLETED_EVENTS:
+            concluidos.extend(_SHEETS_COMPLETED_EVENTS)
+            _SHEETS_COMPLETED_EVENTS.clear()
+
+    return concluidos
 
 
 # ─────────────────────────────────────────────
@@ -1048,6 +1685,7 @@ OTA_REQUIRED_FILES = (
 )
 OTA_PROTECTED_NAMES = {
     "lab.db",
+    "lab.log",
     "config.json",
     "exports",
     "backups",

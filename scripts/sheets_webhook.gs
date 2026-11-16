@@ -15,8 +15,8 @@ function doPost(e) {
       return _jsonResponse({ ok: false, error: "empty_payload" });
     }
 
-    const expectedToken = PropertiesService.getScriptProperties().getProperty("TOKEN")
-      || PropertiesService.getScriptProperties().getProperty("SECRET_TOKEN");
+    const rawToken = PropertiesService.getScriptProperties().getProperty("TOKEN");
+    const expectedToken = rawToken ? String(rawToken).trim() : "";
     if (!expectedToken) {
       return _jsonResponse({ ok: false, error: "server_token_not_configured" });
     }

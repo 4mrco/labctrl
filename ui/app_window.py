@@ -19,12 +19,6 @@ from tkinter import ttk, messagebox
 # LOGGING
 # ─────────────────────────────────────────────
 
-logging.basicConfig(
-    filename="lab.log",
-    level=logging.ERROR,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%d/%m/%Y %H:%M:%S",
-)
 log = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────
@@ -99,11 +93,19 @@ from core.services import (
     gerar_relatorio_csv,
     iniciar_turno_bolsista,
     encerrar_ativos_fechamento,
+    inicializar_data_observada,
+    obter_ultima_data_observada,
+    verificar_virada_dia_orfaos,
     sheets_configurado,
     formatar_mes_aba_sheets,
     registrar_sucesso_sync_sheets,
     disparar_sync_sheets_async,
     verificar_pendencia_sheets_mes_anterior,
+    iniciar_ciclo_recuperacao_sheets,
+    enfileirar_envio_sheets,
+    processar_fila_sheets,
+    tem_sync_sheets_ativo,
+    destino_sheets_vigente,
 )
 from ui.dialogs import (
     mostrar_sobre, pedir_input, popup_sem_matricula,
@@ -158,7 +160,11 @@ class App:
         self._rebuild_abas()
         self._aplicar_tema()
         self._atualizar_lista()
+        if obter_ultima_data_observada() is None:
+            inicializar_data_observada(agora().date())
         self._tick_relogio()
+        if tem_sync_sheets_ativo():
+            self._agendar_poll_sheets()
 
         self.root.protocol("WM_DELETE_WINDOW", self.fechar_aplicacao)
         self._global_binds.clear()
@@ -1350,11 +1356,22 @@ class App:
         self.lbl_clock.config(text=now.strftime("%H:%M"))
 
         if not self._relogio_initial_tick:
+            orfaos_virada = verificar_virada_dia_orfaos(self.config, now)
+            if orfaos_virada:
+                for r in orfaos_virada:
+                    self._push_undo(r)
+                self._atualizar_lista()
+                self._atualizar_dashboard()
+                self.status(f"{len(orfaos_virada)} registro(s) órfão(s) encerrado(s) automaticamente.")
+                mostrar_toast(self.root, f"{len(orfaos_virada)} registro(s) órfão(s) encerrado(s). Use Ctrl+Z para reverter.")
+
             novos_backups = verificar_e_executar_backups(self.config)
             for slot_key in novos_backups:
                 mostrar_toast(self.root, f"Backup das {slot_key}h realizado!")
             if novos_backups:
                 self._verificar_contingencia_sheets()
+            if tem_sync_sheets_ativo() and self._sheets_poll_job is None:
+                self._agendar_poll_sheets()
         self._relogio_initial_tick = False
 
         self._relogio_job = self.root.after(1000, self._tick_relogio)
@@ -1582,9 +1599,8 @@ class App:
             else:
                 mostrar_toast(self.root, "Erro na exportação automática.")
 
-        if res.get("sheets_pending"):
-            pend = res["sheets_pending"]
-            self._iniciar_sync_sheets(pend["mes"], pend["dados"], marcar_mes=True, manual=False)
+        if res.get("sheets_pending") or res.get("sheets_pending_months"):
+            self._iniciar_recuperacao_sheets_auto()
             
         if res.get("orfaos"):
             for r in res["orfaos"]:
@@ -1605,55 +1621,17 @@ class App:
 
     # ── Google Sheets Sync ───────────────────
 
-    def _iniciar_sync_sheets(
-        self,
-        mes: str,
-        dados: list[tuple],
-        marcar_mes: bool = True,
-        manual: bool = False,
-    ):
-        """Dispara sincronização assíncrona com o Google Sheets e monitora via after(200)."""
-        if self._sheets_poll_job is not None:
-            try:
-                self.root.after_cancel(self._sheets_poll_job)
-            except Exception:
-                pass
-            self._sheets_poll_job = None
-
-        self.status("Sincronizando com Google Sheets...")
-        try:
-            self._sheets_queue = disparar_sync_sheets_async(
-                mes, dados, self.config, marcar_mes=marcar_mes
-            )
-        except Exception as e:
-            log.error("Erro ao iniciar sincronização Google Sheets (%s): %s", mes, e)
-            self.status("Erro ao sincronizar com Google Sheets.", erro=True)
-            mostrar_toast(self.root, "Falha ao sincronizar Google Sheets.")
-            return
-
-        self._sheets_poll_job = self.root.after(200, self._poll_sheets_sync)
-
-    def _poll_sheets_sync(self):
-        import queue
-        if self._sheets_queue is None:
-            self._sheets_poll_job = None
-            return
-        try:
-            res = self._sheets_queue.get_nowait()
-        except queue.Empty:
+    def _agendar_poll_sheets(self):
+        if self._sheets_poll_job is None:
             self._sheets_poll_job = self.root.after(200, self._poll_sheets_sync)
+
+    def _apresentar_resultado_sheets(self, res: dict):
+        if not res.get("vigente", True) or not destino_sheets_vigente(res, self.config):
             return
-
-        self._sheets_poll_job = None
-        self._sheets_queue = None
-
         mes = res.get("mes", "")
         mes_aba = res.get("mes_aba") or formatar_mes_aba_sheets(mes)
-        marcar_mes = bool(res.get("marcar_mes", True))
-
         if res.get("ok"):
-            marcado = registrar_sucesso_sync_sheets(mes, self.config, marcar_mes=marcar_mes)
-            if marcado:
+            if res.get("marcado"):
                 msg = f"Google Sheets sincronizado ({mes_aba})"
             else:
                 msg = f"Google Sheets atualizado ({mes_aba})"
@@ -1665,13 +1643,74 @@ class App:
             self.status(msg, erro=True)
             mostrar_toast(self.root, msg)
 
-    def _verificar_contingencia_sheets(self):
-        """Retenta silenciosamente o envio do mês anterior após execução dos backups de 12h/17h."""
-        if self._sheets_poll_job is not None:
+    def _iniciar_recuperacao_sheets_auto(self):
+        """Inicia ou alimenta o ciclo cronológico de recuperação automática de meses fechados."""
+        try:
+            iniciou = iniciar_ciclo_recuperacao_sheets(self.config)
+        except Exception as e:
+            log.error("Erro ao iniciar recuperação automática do Google Sheets: %s", e)
             return
-        pend = verificar_pendencia_sheets_mes_anterior(self.config)
-        if pend:
-            self._iniciar_sync_sheets(pend["mes"], pend["dados"], marcar_mes=True, manual=False)
+        if iniciou or tem_sync_sheets_ativo():
+            self.status("Sincronizando com Google Sheets...")
+            self._agendar_poll_sheets()
+
+    def _iniciar_sync_sheets(
+        self,
+        mes: str,
+        dados: list[tuple],
+        marcar_mes: bool = True,
+        manual: bool = False,
+    ):
+        """Enfileira sincronização assíncrona com o Google Sheets e monitora via after(200)."""
+        self.status("Sincronizando com Google Sheets...")
+        try:
+            enfileirar_envio_sheets(
+                mes, dados, self.config, marcar_mes=marcar_mes, manual=manual
+            )
+        except Exception as e:
+            log.error("Erro ao iniciar sincronização Google Sheets (%s): %s", mes, e)
+            self.status("Erro ao sincronizar com Google Sheets.", erro=True)
+            mostrar_toast(self.root, "Falha ao sincronizar Google Sheets.")
+            return
+
+        self._agendar_poll_sheets()
+
+    def _poll_sheets_sync(self):
+        import queue
+        self._sheets_poll_job = None
+
+        resultados = processar_fila_sheets(self.config)
+
+        if not resultados and self._sheets_queue is not None:
+            try:
+                res = self._sheets_queue.get_nowait()
+                self._sheets_queue = None
+                vigente = destino_sheets_vigente(res, self.config)
+                marcado = False
+                if vigente and res.get("ok"):
+                    marcado = registrar_sucesso_sync_sheets(
+                        res.get("mes", ""),
+                        self.config,
+                        marcar_mes=bool(res.get("marcar_mes", True)),
+                        destino_id=res.get("destino_id"),
+                        webhook_url=res.get("webhook_url"),
+                    )
+                res["vigente"] = vigente
+                res["marcado"] = marcado
+                resultados = [res]
+            except queue.Empty:
+                self._sheets_poll_job = self.root.after(200, self._poll_sheets_sync)
+                return
+
+        for res in resultados:
+            self._apresentar_resultado_sheets(res)
+
+        if tem_sync_sheets_ativo() or self._sheets_queue is not None:
+            self._sheets_poll_job = self.root.after(200, self._poll_sheets_sync)
+
+    def _verificar_contingencia_sheets(self):
+        """Retenta silenciosamente o envio dos meses fechados pendentes após execução dos backups de 12h/17h."""
+        self._iniciar_recuperacao_sheets_auto()
 
 
     # ── Export ───────────────────────────────

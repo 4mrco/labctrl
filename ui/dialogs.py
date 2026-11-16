@@ -73,8 +73,11 @@ def focus_first_field(*fields):
 
 def bind_enter_to_button(widget: tk.Widget, button: tk.Button):
     """Bind Enter key in widget to trigger button click."""
-    widget.bind("<Return>", lambda e: button.invoke())
-    widget.bind("<KP_Enter>", lambda e: button.invoke())
+    def _on_enter(_e=None):
+        button.invoke()
+        return "break"
+    widget.bind("<Return>", _on_enter)
+    widget.bind("<KP_Enter>", _on_enter)
 
 
 def mostrar_toast(parent: tk.Tk | tk.Toplevel, mensagem: str, duration: int = 4000):
@@ -1525,8 +1528,12 @@ def abrir_form_edicao(parent, rid: int, on_success_callback=None):
         campos[label].bind("<FocusOut>", format_fields_on_focus_out)
 
     def salvar():
+        if not win.winfo_exists():
+            return
+        from core.services import normalizar_data_br
+
         # Get values and apply formatting
-        nova_data    = campos["Data (DD/MM/AAAA)"].get().strip()
+        raw_data     = campos["Data (DD/MM/AAAA)"].get().strip()
         nova_entrada = format_hora_on_save(campos["Entrada (HH:MM)"].get().strip())
         nova_saida   = format_hora_on_save(campos["Saída (HH:MM)"].get().strip()) if campos["Saída (HH:MM)"].get().strip() else ""
         nova_maquina = format_maquina_on_save(campos["Máquina"].get().strip())
@@ -1546,7 +1553,7 @@ def abrir_form_edicao(parent, rid: int, on_success_callback=None):
             campos["Máquina"].insert(0, nova_maquina)
 
         try:
-            datetime.strptime(nova_data, "%d/%m/%Y")
+            nova_data = normalizar_data_br(raw_data)
             dt_entrada = datetime.strptime(nova_entrada, "%H:%M")
             if nova_saida:
                 dt_saida = datetime.strptime(nova_saida, "%H:%M")
@@ -1558,6 +1565,9 @@ def abrir_form_edicao(parent, rid: int, on_success_callback=None):
             messagebox.showerror("Formato inválido",
                 "Use DD/MM/AAAA para data e HH:MM para horários.", parent=win)
             return
+
+        campos["Data (DD/MM/AAAA)"].delete(0, tk.END)
+        campos["Data (DD/MM/AAAA)"].insert(0, nova_data)
         novo_nome = campos["Nome"].get().strip()
         try:
             undo_payload = {
@@ -1581,10 +1591,12 @@ def abrir_form_edicao(parent, rid: int, on_success_callback=None):
         if on_success_callback: on_success_callback(undo_payload, status_msg, False)
 
     select_btn = "#35383e"  # Slightly darker than select
-    tk.Button(win, text="Salvar", command=salvar, bd=0, highlightthickness=0,
-              bg=select_btn, fg=t["fg"]).grid(row=len(defs), column=0, columnspan=2, pady=10)
+    btn_salvar = tk.Button(win, text="Salvar", command=salvar, bd=0, highlightthickness=0,
+              bg=select_btn, fg=t["fg"])
+    btn_salvar.grid(row=len(defs), column=0, columnspan=2, pady=10)
     focus_first_field(campos["Nome"])
-    bind_enter_to_button(campos["Nome"], win.winfo_children()[-1])
+    for campo in ordem_campos:
+        bind_enter_to_button(campo, btn_salvar)
     win.bind("<Return>", lambda _: salvar())
     win.bind("<KP_Enter>", lambda _: salvar())
 
@@ -1958,11 +1970,23 @@ def abrir_configuracao_sheets(
                 pass
             poll_state["job"] = None
 
+    def _resolver_token_para_url(url_val: str) -> str:
+        """Retorna o token aplicável à URL informada.
+
+        - Se estiver em modo de edição do token, exige o valor digitado no formulário.
+        - Se o token estiver mascarado (modo_edicao=False), o token salvo só pode ser
+          reutilizado quando url_val corresponder exatamente à url_inicial salva.
+        """
+        if modo_edicao[0]:
+            return entry_token.get().strip()
+        if url_val and url_inicial and url_val == url_inicial:
+            return token_inicial
+        return ""
+
     def _testar_conexao():
         _cancel_poll()
         url_val = _get_url_value()
-        novo_tok = _get_token_value()
-        token_val = novo_tok if modo_edicao[0] else (token_inicial if url_val else "")
+        token_val = _resolver_token_para_url(url_val)
         if not url_val or not url_val.startswith("https://") or not token_val:
             lbl_feedback.configure(
                 text="Falha: URL inacessível ou token incorreto",
@@ -1974,6 +1998,7 @@ def abrir_configuracao_sheets(
         btn_testar.configure(state="disabled")
         q: queue.Queue = queue.Queue()
         poll_state["queue"] = q
+        par_testado = (url_val, token_val)
 
         def _worker():
             res = testar_conexao_sheets(url_val, token_val, timeout=6, opener=opener)
@@ -1982,7 +2007,7 @@ def abrir_configuracao_sheets(
         threading.Thread(target=_worker, daemon=True).start()
 
         def _poll():
-            if not win.winfo_exists():
+            if not win.winfo_exists() or poll_state["queue"] is not q:
                 return
             try:
                 res = q.get_nowait()
@@ -1991,6 +2016,9 @@ def abrir_configuracao_sheets(
                 return
             poll_state["job"] = None
             btn_testar.configure(state="normal")
+            par_atual = (_get_url_value(), _resolver_token_para_url(_get_url_value()))
+            if par_atual != par_testado:
+                return
             if res.get("ok"):
                 lbl_feedback.configure(
                     text="Conexão estabelecida com sucesso!",
@@ -2006,12 +2034,9 @@ def abrir_configuracao_sheets(
 
     def _salvar(event=None):
         url_val = _get_url_value()
-        if modo_edicao[0]:
-            token_val = entry_token.get().strip()
-        else:
-            token_val = token_inicial if url_val else ""
+        token_val = _resolver_token_para_url(url_val)
 
-        # Permite limpar ambos os campos para desativar, ou exige URL https:// + token
+        # Permite limpar ambos os campos para desativar, ou exige URL https:// + token válido para a URL
         if (url_val or token_val) and (not url_val.startswith("https://") or not token_val):
             lbl_feedback.configure(
                 text="Preencha uma URL HTTPS válida e o Token.",
@@ -2020,7 +2045,16 @@ def abrir_configuracao_sheets(
             return
 
         _cancel_poll()
-        salvar_credenciais_sheets(config, url_val, token_val)
+        try:
+            salvar_credenciais_sheets(config, url_val, token_val)
+        except Exception as e:
+            log.error("Falha ao salvar configuração do Google Sheets: %s", e)
+            lbl_feedback.configure(
+                text="Erro ao salvar configuração.",
+                fg="#E05A47",
+            )
+            return
+
         resultado["salvo"] = True
         if on_save_callback:
             try:

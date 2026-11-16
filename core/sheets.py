@@ -263,11 +263,13 @@ def iniciar_sync_sheets_async(
     *,
     mes_ref: str | None = None,
     marcar_mes: bool = True,
+    destino_id=None,
     timeout: int = 10,
     opener=None,
 ) -> queue.Queue:
     """Dispara enviar_mes_sheets em thread daemon e retorna a queue.Queue imediatamente."""
     result_queue: queue.Queue = queue.Queue()
+    url_norm = (webhook_url or "").strip()
 
     def _worker():
         res = enviar_mes_sheets(
@@ -281,6 +283,8 @@ def iniciar_sync_sheets_async(
         res["mes"] = mes_ref if mes_ref is not None else mes_aba
         res["mes_aba"] = mes_aba
         res["marcar_mes"] = bool(marcar_mes)
+        res["webhook_url"] = url_norm
+        res["destino_id"] = destino_id
         result_queue.put(res)
 
     t = threading.Thread(target=_worker, daemon=True)

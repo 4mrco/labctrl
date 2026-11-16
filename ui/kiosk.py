@@ -14,6 +14,7 @@ kiosk-design-clean.md (sobrescrita: nome inline em vez de modal).
 Executar a partir da raiz do projeto:  python3 -m ui.kiosk
 """
 
+import logging
 import math
 import time
 from datetime import datetime, timedelta
@@ -27,19 +28,24 @@ from core.database import (
     contar_ativos,
 )
 from core.services import (
-    agora, formatar_dois_nomes, gerar_id_servidor, iniciar_turno_bolsista,
+    agora, configurar_logging, formatar_dois_nomes, gerar_id_servidor, iniciar_turno_bolsista,
     load_config, load_layout, normalizar_nome, processar_entrada,
     processar_entrada_com_despejo, registrar_defeito_maquina,
     resolver_defeito_maquina, reverter_acao, save_config,
     validar_entrada_nome, verificar_alerta_turno, verificar_e_executar_backups,
     encerrar_ativos_fechamento, disparar_sync_sheets_async,
     registrar_sucesso_sync_sheets, verificar_pendencia_sheets_mes_anterior,
+    inicializar_data_observada, obter_ultima_data_observada, verificar_virada_dia_orfaos,
+    iniciar_ciclo_recuperacao_sheets, processar_fila_sheets, tem_sync_sheets_ativo,
+    destino_sheets_vigente,
 )
 from ui.dialogs import (
     popup_sem_matricula, abrir_form_edicao, mostrar_toast,
     popup_selecionar_bolsista, dialog_atualizacao_disponivel,
     dialog_fechar_com_ativos,
 )
+
+log = logging.getLogger(__name__)
 
 # ── Map Active Palette & Constants (Kiosk Canonical) ─────────────────────
 PC_FREE       = "#1E4D8C"
@@ -202,8 +208,12 @@ class KioskFrame(tk.Frame):
         self._build_ui()
         self._apply_buttons()
         self._render_steps()
+        if obter_ultima_data_observada() is None:
+            inicializar_data_observada(agora().date())
         self._tick_clock()
         self._refresh_map()
+        if tem_sync_sheets_ativo():
+            self._sheets_poll_job = self.after(200, self._poll_sheets_sync)
         self._focus_entry()
         self._init_focus_jobs = [
             self.after(150, self._focus_entry),
@@ -524,46 +534,55 @@ class KioskFrame(tk.Frame):
             self._pill_frame.config(highlightbackground=OUTLINE)
 
         if not self._clock_initial_tick:
+            orfaos_virada = verificar_virada_dia_orfaos(self.config, n)
+            if orfaos_virada:
+                self._refresh_map()
+                if self._state == PANEL and self._selected_machine not in self._occupants:
+                    self._close_slot(focus_mat=True)
+
             novos_backups = verificar_e_executar_backups(self.config)
             for slot_key in novos_backups:
                 mostrar_toast(self.winfo_toplevel(), f"Backup das {slot_key}h realizado!")
             if novos_backups:
                 self._verificar_contingencia_sheets()
+            if tem_sync_sheets_ativo() and self._sheets_poll_job is None:
+                self._sheets_poll_job = self.after(200, self._poll_sheets_sync)
         self._clock_initial_tick = False
 
         self._clock_job = self.after(1000, self._tick_clock)
 
     def _verificar_contingencia_sheets(self):
-        if self._sheets_poll_job is not None:
-            return
-        pend = verificar_pendencia_sheets_mes_anterior(self.config)
-        if not pend:
-            return
         try:
-            self._sheets_queue = disparar_sync_sheets_async(
-                pend["mes"], pend["dados"], self.config, marcar_mes=True
-            )
+            iniciou = iniciar_ciclo_recuperacao_sheets(self.config)
+        except Exception as e:
+            log.error("Erro ao iniciar contingência Google Sheets no Kiosk: %s", e)
+            return
+        if (iniciou or tem_sync_sheets_ativo()) and self._sheets_poll_job is None:
             self._sheets_poll_job = self.after(200, self._poll_sheets_sync)
-        except Exception:
-            self._sheets_queue = None
-            self._sheets_poll_job = None
 
     def _poll_sheets_sync(self):
         import queue
-        if self._sheets_queue is None:
-            self._sheets_poll_job = None
-            return
-        try:
-            res = self._sheets_queue.get_nowait()
-        except queue.Empty:
-            self._sheets_poll_job = self.after(200, self._poll_sheets_sync)
-            return
         self._sheets_poll_job = None
-        self._sheets_queue = None
-        if res.get("ok"):
-            registrar_sucesso_sync_sheets(
-                res.get("mes", ""), self.config, marcar_mes=bool(res.get("marcar_mes", True))
-            )
+        resultados = processar_fila_sheets(self.config)
+
+        if not resultados and self._sheets_queue is not None:
+            try:
+                res = self._sheets_queue.get_nowait()
+                self._sheets_queue = None
+                if destino_sheets_vigente(res, self.config) and res.get("ok"):
+                    registrar_sucesso_sync_sheets(
+                        res.get("mes", ""),
+                        self.config,
+                        marcar_mes=bool(res.get("marcar_mes", True)),
+                        destino_id=res.get("destino_id"),
+                        webhook_url=res.get("webhook_url"),
+                    )
+            except queue.Empty:
+                self._sheets_poll_job = self.after(200, self._poll_sheets_sync)
+                return
+
+        if tem_sync_sheets_ativo() or self._sheets_queue is not None:
+            self._sheets_poll_job = self.after(200, self._poll_sheets_sync)
 
     # ── Feedback ──────────────────────────────────────────────────────────
 
@@ -1741,6 +1760,7 @@ class KioskFrame(tk.Frame):
 
 def main():
     from core.database import init_db
+    configurar_logging()
     init_db()
     root = tk.Tk()
     root.title("LabCTRL — Kiosk")
